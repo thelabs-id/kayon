@@ -12,21 +12,24 @@ export default function Library() {
   const [verdicts, setVerdicts] = useState<Record<string, FitVerdict>>({})
   const [confirm, setConfirm] = useState<InstalledModel|null>(null)
   const [busy, setBusy] = useState(false)
+  // Load settings drive BOTH the shown verdict and the runtime launch, so the two never diverge.
+  const [ctx, setCtx] = useState(4096)
+  const [kvQuant, setKvQuant] = useState(false)
 
   const load = async () => {
     const [m,d] = await Promise.all([api.library(), api.downloads()])
     if (m.ok && m.data) {
       setModels(m.data)
-      // FIT-1/LIB-2: exact local verdict read from each installed GGUF on disk.
+      // FIT-1/LIB-2: exact local verdict read from each installed GGUF at the chosen ctx/KV.
       for (const model of m.data) {
-        api.localVerdict(model.id, 4096, 2).then(r => {
+        api.localVerdict(model.id, ctx, kvQuant ? 1 : 2).then(r => {
           if (r.ok && r.data) setVerdicts(v => ({ ...v, [model.id]: r.data! }))
         })
       }
     }
     if (d.ok && d.data) setDownloads(d.data)
   }
-  useEffect(() => { load(); const iv = setInterval(load, 2000); return () => clearInterval(iv) }, [])
+  useEffect(() => { load(); const iv = setInterval(load, 2000); return () => clearInterval(iv) }, [ctx, kvQuant])
 
   const active = downloads.filter(d => d.status === 'active' || d.status === 'queued')
 
@@ -40,15 +43,27 @@ export default function Library() {
   }
 
   const loadModel = async (m: InstalledModel) => {
-    // Server computes n_gpu_layers from the local verdict and pulls runtimeArgs from the
-    // catalog (§7 single-sourcing), so we just name the installed model.
-    const r = await api.runtimeLoad(m.id, 4096, 2)
+    // Launch with the SAME ctx/KV the shown verdict was computed under (§7 single-sourcing),
+    // so a q8_0-only or long-context choice runs the config the user actually saw fit.
+    const r = await api.runtimeLoad(m.id, ctx, kvQuant ? 1 : 2)
     if (!r.ok) alert('Failed: ' + r.error)
   }
 
   return (
     <div>
-      <h1 className="page-title">Library</h1>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h1 className="page-title" style={{margin:0}}>Library</h1>
+        <div style={{display:'flex',gap:12,alignItems:'center'}}>
+          <span className="text-sm text-muted">Load context:</span>
+          <select className="input" style={{width:110,padding:'6px 10px'}} value={ctx} onChange={e=>setCtx(+e.target.value)}>
+            {[2048,4096,8192,16384,32768].map(v=><option key={v} value={v}>{v.toLocaleString()}</option>)}
+          </select>
+          <label className="text-sm text-muted" style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}} title="q8_0 KV cache — the fit verdict and llama-server launch use it together (OD-1)">
+            <input type="checkbox" checked={kvQuant} onChange={e=>setKvQuant(e.target.checked)}/>
+            q8_0 KV
+          </label>
+        </div>
+      </div>
       {active.length > 0 && (
         <div className="card">
           <div className="card-title" style={{marginBottom:12}}>Active Downloads</div>

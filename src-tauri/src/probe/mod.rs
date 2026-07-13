@@ -1,17 +1,28 @@
 use anyhow::Result;
 use chrono::Utc;
 use nvml_wrapper::Nvml;
+use std::sync::{Mutex, OnceLock};
 use sysinfo::System;
 
 use crate::ipc::*;
 
+// Persistent System so CPU utilization is a real delta between polls. sysinfo computes usage from
+// the difference between two refreshes of the SAME System; a fresh instance every poll always
+// reads ~0%. At 1 Hz the interval between refreshes is satisfied.
+fn shared_system() -> &'static Mutex<System> {
+    static SYS: OnceLock<Mutex<System>> = OnceLock::new();
+    SYS.get_or_init(|| Mutex::new(System::new_all()))
+}
+
 pub fn probe_machine() -> Result<MachineProfile> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let mut sys = shared_system().lock().unwrap();
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
     let gpus = probe_gpus();
     let primary_gpu_index = if gpus.is_empty() { None } else { Some(0) };
     let cpu = probe_cpu(&sys);
     let ram = probe_ram(&sys);
+    drop(sys);
     let disks = probe_disks();
     let os = probe_os();
 

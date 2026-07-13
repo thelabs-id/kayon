@@ -182,6 +182,12 @@ impl RuntimeManager {
         ]
     }
 
+    /// Version of the bundled llama.cpp runtime (RUN-1 / catalog `runtimeMinVersion` gate). Real
+    /// builds set this at package time; overridable via env for testing. Format: llama.cpp build id.
+    pub fn bundled_runtime_version() -> String {
+        std::env::var("KAYON_RUNTIME_VERSION").unwrap_or_else(|_| "b9999".to_string())
+    }
+
     /// Resolve the `llama-server` binary (RUN-1). Order: `KAYON_LLAMA_SERVER` env override,
     /// else the bundled sidecar under the crate's `binaries/` dir, else the name on PATH.
     pub fn llama_server_binary() -> String {

@@ -542,11 +542,21 @@ async fn runtime_load(
     }
     let n_gpu_layers = verdict.as_ref().map(|v| v.n_gpu_layers).unwrap_or(999);
 
-    // runtimeArgs from the catalog entry, if this model came from the catalog (RUN-1).
-    let runtime_args = catalog::get_active_catalog().ok()
-        .and_then(|c| c.entries.iter()
-            .find(|e| e.id == model.model_id)
-            .and_then(|e| e.quants.iter().find(|qu| qu.label == model.quant_label).map(|qu| qu.runtime_args.clone())))
+    // Catalog-derived launch settings (RUN-1): runtimeArgs, plus the runtimeMinVersion gate — a
+    // signed entry can require a newer llama.cpp than the bundled one even when the arch is known.
+    let cat_entry = catalog::get_active_catalog().ok()
+        .and_then(|c| c.entries.into_iter().find(|e| e.id == model.model_id));
+    if let Some(min) = cat_entry.as_ref().and_then(|e| e.arch.runtime_min_version.clone()) {
+        let bundled = runtime::RuntimeManager::bundled_runtime_version();
+        if !runtime_version_satisfies(&bundled, &min) {
+            return err_json(&format!(
+                "'{}' needs llama.cpp runtime >= {} but the bundled runtime is {} — needs newer runtime (RUN-1)",
+                model.model_id, min, bundled
+            )).into_response();
+        }
+    }
+    let runtime_args = cat_entry.as_ref()
+        .and_then(|e| e.quants.iter().find(|qu| qu.label == model.quant_label).map(|qu| qu.runtime_args.clone()))
         .unwrap_or_default();
 
     let port = runtime::RuntimeManager::find_available_port();
@@ -707,6 +717,17 @@ async fn static_handler(
         }
     }
     (StatusCode::OK, [("content-type", "text/html")], FALLBACK_HTML.to_string()).into_response()
+}
+
+/// Whether the bundled llama.cpp version satisfies a catalog entry's `runtimeMinVersion`. Compares
+/// the numeric build id (e.g. "b4321" -> 4321); when a value can't be parsed we fail open to
+/// launching rather than blocking a valid model on a format quirk.
+fn runtime_version_satisfies(bundled: &str, required: &str) -> bool {
+    let num = |s: &str| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse::<u64>().ok();
+    match (num(bundled), num(required)) {
+        (Some(b), Some(r)) => b >= r,
+        _ => true,
+    }
 }
 
 fn content_type_for(p: &std::path::Path) -> &'static str {
