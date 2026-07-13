@@ -509,6 +509,15 @@ async fn runtime_load(
 
     // Computed offload from the exact local verdict (single-sourced with the runtime).
     let verdict = fit::evaluate_local(&model.model_id, &model.quant_label, &model.path, ctx, kv);
+    // Honest refusal: don't start llama-server for a model the fit engine says can't fit at all.
+    if let Ok(v) = &verdict {
+        if v.verdict == VerdictKind::ExceedsMachine {
+            return err_json(&format!(
+                "'{}' exceeds this machine's VRAM + RAM at ctx {} — not launching. {}",
+                model.model_id, ctx, v.explainability
+            )).into_response();
+        }
+    }
     let n_gpu_layers = verdict.as_ref().map(|v| v.n_gpu_layers).unwrap_or(999);
 
     // runtimeArgs from the catalog entry, if this model came from the catalog (RUN-1).

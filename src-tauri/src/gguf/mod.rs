@@ -253,13 +253,29 @@ pub fn arch_from_header(h: &GgufHeader) -> Option<String> {
 }
 
 pub fn attention_type(h: &GgufHeader) -> Option<String> {
+    // Check the architecture-scoped key (`<arch>.attention.type`) as well as the general ones,
+    // so a supported-arch model that declares hybrid/linear attention is caught, not treated as
+    // standard and given a fabricated KV verdict (FIT-2).
+    if let Some(arch) = arch_from_header(h) {
+        if let Some(v) = h.metadata.get(&format!("{arch}.attention.type")).and_then(|v| v.as_str()) {
+            return Some(v.to_string());
+        }
+    }
     h.metadata.get("general.attention.type")
         .or_else(|| h.metadata.get("attention.type"))
         .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
+/// Architectures the §7 KV model is validated for. Standard-attention MoE models (mixtral,
+/// qwen2moe, …) are included: MoE changes the FFN, not attention, so KV is modeled normally and
+/// W_total (all experts resident) already captures the weight need (§7).
 pub fn supported_standard_attention_archs() -> &'static [&'static str] {
-    &["llama", "mistral", "gemma", "gemma2", "qwen2", "phi3", "phi", "starcoder2", "command-r", "deepseek2"]
+    &[
+        "llama", "mistral", "gemma", "gemma2", "qwen2", "qwen3", "phi3", "phi", "starcoder2",
+        "command-r", "cohere2", "deepseek2", "stablelm", "internlm2",
+        // standard-attention Mixture-of-Experts:
+        "mixtral", "qwen2moe", "qwen3moe", "dbrx", "granitemoe", "olmoe",
+    ]
 }
 
 #[allow(dead_code)] // reusable GGUF utility (used by tooling / future local-quant display)

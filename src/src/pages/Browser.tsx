@@ -32,11 +32,12 @@ export default function Browser() {
     return m
   }, [verdicts])
 
-  const sorted = useMemo(() => [...catalog].sort((a,b) => {
-    const va = order[vMap.get(`${a.id}|${a.quants[0]?.label}`)?.verdict || ''] ?? 99
-    const vb = order[vMap.get(`${b.id}|${b.quants[0]?.label}`)?.verdict || ''] ?? 99
-    return va - vb
-  }), [catalog, vMap])
+  // Rank each model by its BEST quant (lowest order index across all quants), so "best fit leads"
+  // holds even when the first-listed quant doesn't fit but a lighter one does (CAT-3).
+  const bestRank = (e: CatalogEntry) =>
+    Math.min(...e.quants.map(q => order[vMap.get(`${e.id}|${q.label}`)?.verdict || ''] ?? 99), 99)
+  const sorted = useMemo(() => [...catalog].sort((a,b) => bestRank(a) - bestRank(b)),
+    [catalog, vMap])
 
   const download = async (entry: CatalogEntry, q: {label:string;bytes:number;sha256:string;source:string}) => {
     setDownloading(`${entry.id}-${q.label}`)
@@ -66,7 +67,7 @@ export default function Browser() {
         Best fit for your machine leads. Verdicts come from the fit engine (weights + KV + buffers + headroom), never naive file-size comparison.
       </div>
       {sorted.map(entry => {
-        const isBest = vMap.get(`${entry.id}|${entry.quants[0]?.label}`)?.verdict === 'FITS_FULLY'
+        const isBest = entry.quants.some(q => vMap.get(`${entry.id}|${q.label}`)?.verdict === 'FITS_FULLY')
         return (
           <div key={entry.id} className="model-card" style={{marginBottom:16}}>
             <div className="model-card-header">

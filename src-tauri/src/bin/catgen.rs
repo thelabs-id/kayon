@@ -94,7 +94,10 @@ async fn main() {
                 "architecture": architecture,
                 "blockCount": meta_u32(&h, &architecture, "block_count"),
                 "headCount": meta_u32(&h, &architecture, "attention.head_count"),
-                "headCountKv": meta_u32(&h, &architecture, "attention.head_count_kv"),
+                // Fall back to head_count for non-GQA models that omit head_count_kv, so the
+                // generated (required u32) field is never null and the signed catalog deserializes.
+                "headCountKv": meta_u32(&h, &architecture, "attention.head_count_kv")
+                    .or_else(|| meta_u32(&h, &architecture, "attention.head_count")),
                 "embeddingLength": meta_u32(&h, &architecture, "embedding_length"),
                 "contextLength": meta_u32(&h, &architecture, "context_length"),
                 "keyLength": meta_u32(&h, &architecture, "attention.key_length"),
