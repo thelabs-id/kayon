@@ -39,10 +39,12 @@ export default function Settings() {
   const showPreview = async () => { const r = await api.telemetryPreview(); if (r.ok && r.data) setPreview(r.data) }
 
   const adopt = async (m: OllamaModel) => {
-    // OLL-4: cross-volume needs an explicit copy choice (relocate is the other option).
+    // OLL-4: cross-volume can't hard-link, so the offered action is an explicit copy (disk
+    // pre-flight applies). The zero-copy alternative is to relocate your Kayon library onto the
+    // Ollama drive — a manual step (move ~/.kayon/models and set the library dir), not done here.
     let mode: 'copy' | undefined
     if (!m.sameVolumeAsLibrary) {
-      if (!window.confirm(`${m.name}:${m.tag} is on a different drive. Copy it into the library (${(m.sizeBytes/1024**3).toFixed(1)} GB)? Cancel to relocate the library instead.`)) return
+      if (!window.confirm(`${m.name}:${m.tag} is on a different drive, so it can't be hard-linked. Copy it into the library (${(m.sizeBytes/1024**3).toFixed(1)} GB)?\n\nTo keep it zero-copy instead, relocate your Kayon library onto that drive first (see README), then adopt.`)) return
       mode = 'copy'
     }
     setAdopting(`${m.name}:${m.tag}`)

@@ -63,11 +63,17 @@ impl DownloadManager {
         }
         // Bytes already on disk from a prior partial transfer count toward the model — the
         // pre-flight only needs free space for the REMAINING bytes (CAT-4, DL-1).
-        let received = if path.exists() {
+        let mut received = if path.exists() {
             std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
         } else {
             0
         };
+        // A file larger than the expected size is stale/corrupt: discard it now and treat this as a
+        // fresh download, so the pre-flight checks the FULL size instead of a bogus zero remaining.
+        if total_bytes > 0 && received > total_bytes {
+            let _ = std::fs::remove_file(path);
+            received = 0;
+        }
         let remaining = total_bytes.saturating_sub(received);
         let free = free_disk_for_path(target_path)?;
         if free < remaining {

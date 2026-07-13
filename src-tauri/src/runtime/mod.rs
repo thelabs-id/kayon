@@ -198,6 +198,20 @@ impl RuntimeManager {
                 return p;
             }
         }
+        // Installed layout: the sidecar sits next to (or in binaries/ beside) the running exe.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for cand in [
+                    dir.join("llama-server.exe"),
+                    dir.join("binaries").join("llama-server.exe"),
+                ] {
+                    if cand.is_file() {
+                        return cand.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
+        // Dev tree fallback.
         let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join("llama-server.exe");
