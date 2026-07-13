@@ -122,14 +122,28 @@ pub async fn fetch_remote_catalog(
 
     let client = reqwest::Client::new();
 
-    let json_resp = client.get(&json_url).send().await?;
+    // Each GET is logged whether it returns a response or fails at the socket (DNS/TLS/connect),
+    // so PRIV-5's network log accounts for every outbound attempt, not just successful ones.
+    let json_resp = match client.get(&json_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            crate::telemetry::log_network_request_full(db, "GET", &json_url, "catalog", 0, 0, None, Some(format!("failed: {}", e)));
+            return Err(e.into());
+        }
+    };
     let json_status = json_resp.status().as_u16();
     let json_bytes = json_resp.bytes().await?.to_vec();
     crate::telemetry::log_network_request_full(
         db, "GET", &json_url, "catalog", 0, json_bytes.len() as u64, Some(json_status), None,
     );
 
-    let sig_resp = client.get(&sig_url).send().await?;
+    let sig_resp = match client.get(&sig_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            crate::telemetry::log_network_request_full(db, "GET", &sig_url, "catalog", 0, 0, None, Some(format!("failed: {}", e)));
+            return Err(e.into());
+        }
+    };
     let sig_status = sig_resp.status().as_u16();
     let sig_bytes = sig_resp.bytes().await?.to_vec();
     crate::telemetry::log_network_request_full(

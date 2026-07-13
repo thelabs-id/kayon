@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 2,
+  "revision": 3,
   "generatedAt": "2025-01-01T00:00:00Z",
   "source": "bundled",
   "verifiedSignature": null,
@@ -33,6 +33,38 @@
           "bytes": 144811360,
           "sha256": "5a1395716f7913741cc51d98581b9b1228d80987a9f7d3664106742eb06bba83",
           "source": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf",
+          "runtimeArgs": []
+        }
+      ]
+    },
+    {
+      "id": "qwen2.5-0.5b-instruct",
+      "family": "Qwen",
+      "params": "0.5B",
+      "license": "Apache-2.0",
+      "capabilities": {
+        "tools": true,
+        "reasoning": false,
+        "vision": false
+      },
+      "arch": {
+        "architecture": "qwen2",
+        "blockCount": 24,
+        "headCount": 14,
+        "headCountKv": 2,
+        "embeddingLength": 896,
+        "contextLength": 32768,
+        "keyLength": null,
+        "valueLength": null,
+        "attentionType": null,
+        "runtimeMinVersion": null
+      },
+      "quants": [
+        {
+          "label": "Q4_K_M",
+          "bytes": 491400032,
+          "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+          "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
           "runtimeArgs": []
         }
       ]
