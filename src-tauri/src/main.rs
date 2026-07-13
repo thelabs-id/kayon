@@ -73,6 +73,8 @@ async fn main() {
         .route("/api/fit/verdicts", get(all_verdicts))
         .route("/api/fit/verdict/{model_id}/{quant_label}", get(verdict))
         .route("/api/library", get(library_list))
+        .route("/api/library/dir", get(library_dir_info))
+        .route("/api/library/relocate", post(library_relocate))
         .route("/api/fit/local/{id}", get(local_verdict))
         .route("/api/library/delete/{id}", post(delete_model))
         .route("/api/downloads", get(list_downloads))
@@ -284,6 +286,33 @@ async fn local_verdict(
     match fit::evaluate_local(&model.model_id, &model.quant_label, &model.path, ctx, kv) {
         Ok(v) => ok_json(v).into_response(),
         Err(e) => err_json(&format!("could not read GGUF for local verdict: {}", e)).into_response(),
+    }
+}
+
+async fn library_dir_info(State(_s): State<AppState>) -> impl IntoResponse {
+    ok_json(library::library_dir().to_string_lossy().to_string()).into_response()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RelocateReq { path: String }
+
+async fn library_relocate(
+    State(s): State<AppState>,
+    Json(req): Json<RelocateReq>,
+) -> impl IntoResponse {
+    // LIB-1 move-in-place migration; on the blocking pool since it moves/copies model files.
+    let db = s.db.clone();
+    let path = req.path.clone();
+    let res = tokio::task::spawn_blocking(move || library::relocate_library(&db, &path))
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("relocate task panicked: {}", e)));
+    match res {
+        Ok(moved) => ok_json(serde_json::json!({
+            "movedFiles": moved,
+            "libraryDir": library::library_dir().to_string_lossy(),
+        })).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
     }
 }
 

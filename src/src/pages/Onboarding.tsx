@@ -19,7 +19,8 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       for (const x of v.data) vm.set(`${x.modelId}|${x.quantLabel}`, x)
       // Computed best pick (FR-2/CAT-3): rank by verdict quality, then by model capability
       // (larger weight = more capable), then prefer the heavier quant. Never "first that fits".
-      const tier: Record<string, number> = { FITS_FULLY: 3, FITS_TIGHT: 2, GPU_CPU_SPLIT: 1 }
+      // Include CPU_ONLY so the no-GPU degraded path still offers a hardware-computed best pick.
+      const tier: Record<string, number> = { FITS_FULLY: 4, FITS_TIGHT: 3, GPU_CPU_SPLIT: 2, CPU_ONLY: 1 }
       let best: {entry: CatalogEntry; verdict: FitVerdict}|null = null
       let bestScore = -1
       const isPinned = (sha: string) => /^[0-9a-f]{64}$/i.test((sha || '').trim())

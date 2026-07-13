@@ -10,12 +10,23 @@ export default function Settings() {
   const [preview, setPreview] = useState<{endpoint:string;payload:string;byteSize:number}|null>(null)
   const [pendingEnable, setPendingEnable] = useState(false)
   const [adopting, setAdopting] = useState<string|null>(null)
+  const [libDir, setLibDir] = useState('')
 
   const load = async () => {
-    const [o,n,t] = await Promise.all([api.ollamaModels(), api.networkLog(), api.telemetryStatus()])
+    const [o,n,t,l] = await Promise.all([api.ollamaModels(), api.networkLog(), api.telemetryStatus(), api.libraryDir()])
     if (o.ok && o.data) setOllama(o.data)
     if (n.ok && n.data) setNetLog(n.data)
     if (t.ok && t.data) setTelemetry(t.data)
+    if (l.ok && l.data) setLibDir(l.data)
+  }
+
+  const relocate = async () => {
+    const dest = window.prompt('Move the Kayon library to this folder (e.g. on your Ollama drive for zero-copy adoption):', libDir)
+    if (!dest || dest === libDir) return
+    const r = await api.relocateLibrary(dest)
+    if (!r.ok) { alert('Relocate failed: ' + r.error); return }
+    alert(`Library moved to ${r.data!.libraryDir} (${r.data!.movedFiles} file(s) migrated).`)
+    load()
   }
   useEffect(() => { load() }, [])
 
@@ -44,7 +55,8 @@ export default function Settings() {
     // Ollama drive — a manual step (move ~/.kayon/models and set the library dir), not done here.
     let mode: 'copy' | undefined
     if (!m.sameVolumeAsLibrary) {
-      if (!window.confirm(`${m.name}:${m.tag} is on a different drive, so it can't be hard-linked. Copy it into the library (${(m.sizeBytes/1024**3).toFixed(1)} GB)?\n\nTo keep it zero-copy instead, relocate your Kayon library onto that drive first (see README), then adopt.`)) return
+      const copy = window.confirm(`${m.name}:${m.tag} is on a different drive, so it can't be hard-linked.\n\nOK = copy it into the library (${(m.sizeBytes/1024**3).toFixed(1)} GB).\nCancel = relocate your Kayon library onto that drive first (zero-copy), then adopt.`)
+      if (!copy) { await relocate(); return }
       mode = 'copy'
     }
     setAdopting(`${m.name}:${m.tag}`)
@@ -84,6 +96,15 @@ export default function Settings() {
             {preview.payload}
           </pre>}
         </div>}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Library location</span>
+          <button className="btn btn-secondary btn-sm" onClick={relocate}>Relocate library…</button>
+        </div>
+        <div className="text-sm text-muted">Managed models live here. Relocate onto your Ollama drive to adopt cross-volume models with zero-copy hard links (OLL-4 / LIB-1).</div>
+        <div className="mono text-xs" style={{marginTop:8}}>{libDir || '…'}</div>
       </div>
 
       <div className="card">

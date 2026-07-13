@@ -210,6 +210,15 @@ impl Database {
         ).optional()?)
     }
 
+    pub fn update_installed_path(&self, id: &str, new_path: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE installed_models SET path = ?2 WHERE id = ?1",
+            params![id, new_path],
+        )?;
+        Ok(())
+    }
+
     pub fn remove_installed_model(&self, id: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute("DELETE FROM installed_models WHERE id = ?1", params![id])?;

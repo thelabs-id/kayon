@@ -248,6 +248,9 @@ export const api = {
   },
   verdict: (id: string, q: string) => apiFetch<ApiResponse<FitVerdict>>(`/api/fit/verdict/${id}/${q}`),
   library: () => apiFetch<ApiResponse<InstalledModel[]>>('/api/library'),
+  libraryDir: () => apiFetch<ApiResponse<string>>('/api/library/dir'),
+  relocateLibrary: (path: string) =>
+    apiFetch<ApiResponse<{ movedFiles: number; libraryDir: string }>>('/api/library/relocate', { method: 'POST', body: JSON.stringify({ path }) }),
   localVerdict: (id: string, ctx?: number, kvTypeBytes?: number) => {
     const p = new URLSearchParams()
     if (ctx) p.set('ctx', String(ctx))
