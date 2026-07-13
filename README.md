@@ -84,6 +84,13 @@ Then open <http://127.0.0.1:9518>.
 
 For hot-reload UI development, run `npm run dev` in `src/` (Vite on :3000, proxies `/api` to :9518).
 
+### Cross-volume Ollama adoption
+
+Hard links can't span drives. If your Ollama store is on a different volume than Kayon's library
+(`~/.kayon/models`), adoption offers a **copy** (with a disk pre-flight). To keep it zero-copy,
+relocate the library onto the Ollama drive first — move `~/.kayon/models` there and point Kayon at
+the new location — then adopt so future adoptions hard-link.
+
 ### Pointing at a llama-server binary
 
 The runtime resolves the binary in this order: the `KAYON_LLAMA_SERVER` environment variable, then a
