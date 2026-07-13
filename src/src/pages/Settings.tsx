@@ -8,6 +8,7 @@ export default function Settings() {
   const [netLog, setNetLog] = useState<NetworkLogEntry[]>([])
   const [telemetry, setTelemetry] = useState<TelemetryStatus|null>(null)
   const [preview, setPreview] = useState<{endpoint:string;payload:string;byteSize:number}|null>(null)
+  const [pendingEnable, setPendingEnable] = useState(false)
   const [adopting, setAdopting] = useState<string|null>(null)
 
   const load = async () => {
@@ -18,7 +19,23 @@ export default function Settings() {
   }
   useEffect(() => { load() }, [])
 
-  const toggle = async () => { if (!telemetry) return; const r = await api.telemetryToggle(!telemetry.enabled); if (r.ok && r.data) setTelemetry(r.data) }
+  // PRIV-4: enabling telemetry never persists until the user has seen the literal payload and
+  // confirmed. Turning it off is immediate.
+  const toggle = async () => {
+    if (!telemetry) return
+    if (telemetry.enabled) {
+      const r = await api.telemetryToggle(false); if (r.ok && r.data) setTelemetry(r.data)
+      setPendingEnable(false)
+    } else {
+      const r = await api.telemetryPreview()
+      if (r.ok && r.data) { setPreview(r.data); setPendingEnable(true) }
+    }
+  }
+  const confirmEnable = async () => {
+    const r = await api.telemetryToggle(true); if (r.ok && r.data) setTelemetry(r.data)
+    setPendingEnable(false)
+  }
+  const cancelEnable = () => { setPendingEnable(false) }
   const showPreview = async () => { const r = await api.telemetryPreview(); if (r.ok && r.data) setPreview(r.data) }
 
   const adopt = async (m: OllamaModel) => {
@@ -45,7 +62,15 @@ export default function Settings() {
           </div>
           <button className={`toggle ${telemetry?.enabled?'active':''}`} onClick={toggle}/>
         </div>
-        {telemetry?.enabled && <div style={{marginTop:12}}>
+        {pendingEnable && preview && <div style={{marginTop:12,padding:12,background:'rgba(224,145,107,0.08)',borderRadius:6}}>
+          <div className="text-sm" style={{marginBottom:8}}>These are the <strong>exact bytes</strong> that would be sent to <span className="mono">{preview.endpoint}</span>. Nothing leaves your machine until you confirm.</div>
+          <pre className="mono" style={{fontSize:11,overflow:'auto',margin:0,padding:8,background:'#0a0a0a',color:'#a8e6a8',borderRadius:4}}>{preview.payload}</pre>
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <button className="btn btn-primary btn-sm" onClick={confirmEnable}>Confirm & enable telemetry</button>
+            <button className="btn btn-ghost btn-sm" onClick={cancelEnable}>Cancel</button>
+          </div>
+        </div>}
+        {telemetry?.enabled && !pendingEnable && <div style={{marginTop:12}}>
           <button className="btn btn-secondary btn-sm" onClick={showPreview}>Show literal payload</button>
           {preview && <pre className="mono" style={{fontSize:11,overflow:'auto',margin:'8px 0 0',padding:8,background:'#0a0a0a',color:'#a8e6a8',borderRadius:4}}>
             {preview.payload}

@@ -1,19 +1,23 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
+use std::collections::VecDeque;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::ipc::*;
 
 pub struct RuntimeManager {
     child: Mutex<Option<Child>>,
     status: Mutex<RuntimeStatus>,
+    // Recent sidecar log lines (drained from stdout/stderr) for surfacing on a health timeout.
+    logs: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl RuntimeManager {
     pub fn new() -> Self {
         Self {
             child: Mutex::new(None),
+            logs: Arc::new(Mutex::new(VecDeque::new())),
             status: Mutex::new(RuntimeStatus {
                 kind: RuntimeStatusKind::Stopped,
                 model_id: None,
@@ -70,8 +74,18 @@ impl RuntimeManager {
             cmd.arg(arg);
         }
 
-        let child = cmd.spawn().map_err(|e| anyhow!("failed to start llama-server: {}", e))?;
+        let mut child = cmd.spawn().map_err(|e| anyhow!("failed to start llama-server: {}", e))?;
         let pid = child.id();
+
+        // Drain stdout+stderr on background threads. Without this, a child that writes enough log
+        // output fills the OS pipe buffer and blocks — never reaching /health or stalling mid-gen.
+        self.logs.lock().unwrap().clear();
+        if let Some(out) = child.stdout.take() {
+            Self::drain_stream(out, self.logs.clone());
+        }
+        if let Some(err) = child.stderr.take() {
+            Self::drain_stream(err, self.logs.clone());
+        }
 
         *child_guard = Some(child);
 
@@ -89,6 +103,28 @@ impl RuntimeManager {
         };
 
         Ok(())
+    }
+
+    /// Spawn a thread that reads a child pipe line-by-line into the capped log ring buffer.
+    fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, logs: Arc<Mutex<VecDeque<String>>>) {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(stream);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut buf = logs.lock().unwrap();
+                buf.push_back(line);
+                while buf.len() > 200 {
+                    buf.pop_front();
+                }
+            }
+        });
+    }
+
+    /// Last few captured sidecar log lines (for surfacing on a health-check timeout).
+    pub fn log_tail(&self, n: usize) -> String {
+        let buf = self.logs.lock().unwrap();
+        let start = buf.len().saturating_sub(n);
+        buf.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
     }
 
     pub fn mark_running(&self) {

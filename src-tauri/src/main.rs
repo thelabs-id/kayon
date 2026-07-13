@@ -401,7 +401,8 @@ fn spawn_health_wait(rt: Arc<runtime::RuntimeManager>, port: u16) {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        rt.mark_error("health check timeout");
+        let tail = rt.log_tail(8);
+        rt.mark_error(&format!("health check timeout. llama-server log tail:\n{}", tail));
     });
 }
 
@@ -420,6 +421,22 @@ async fn runtime_load(
     };
     let ctx = q.ctx.unwrap_or(4096);
     let kv = q.kv_type_bytes.unwrap_or(2).clamp(1, 2);
+
+    // OLL-6 runtime gate, recomputed on load: refuse to launch a model whose GGUF architecture the
+    // bundled llama-server can't load, rather than starting a server that will fail. This catches
+    // adopted models flagged "needs newer runtime" at discovery.
+    if let Ok(h) = crate::gguf::parse_gguf_header(std::path::Path::new(&model.path)) {
+        if let Some(arch) = crate::gguf::arch_from_header(&h) {
+            let loadable = runtime::RuntimeManager::supported_runtime_archs()
+                .iter().any(|a| a.eq_ignore_ascii_case(&arch));
+            if !loadable {
+                return err_json(&format!(
+                    "architecture '{}' needs a newer llama.cpp runtime than the bundled one (OLL-6) — not launching",
+                    arch
+                )).into_response();
+            }
+        }
+    }
 
     // Computed offload from the exact local verdict (single-sourced with the runtime).
     let verdict = fit::evaluate_local(&model.model_id, &model.quant_label, &model.path, ctx, kv);

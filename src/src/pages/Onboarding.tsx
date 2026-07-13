@@ -17,11 +17,18 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       if (!c.ok || !c.data || !v.ok || !v.data) return
       const vm = new Map<string, FitVerdict>()
       for (const x of v.data) vm.set(`${x.modelId}|${x.quantLabel}`, x)
+      // Computed best pick (FR-2/CAT-3): rank by verdict quality, then by model capability
+      // (larger weight = more capable), then prefer the heavier quant. Never "first that fits".
+      const tier: Record<string, number> = { FITS_FULLY: 3, FITS_TIGHT: 2, GPU_CPU_SPLIT: 1 }
       let best: {entry: CatalogEntry; verdict: FitVerdict}|null = null
+      let bestScore = -1
       for (const entry of c.data.entries) {
         for (const q of entry.quants) {
-          const v = vm.get(`${entry.id}|${q.label}`)
-          if (v && (v.verdict === 'FITS_FULLY' || v.verdict === 'FITS_TIGHT') && !best) best = { entry, verdict: v }
+          const vd = vm.get(`${entry.id}|${q.label}`)
+          if (!vd || !(vd.verdict in tier)) continue
+          // weight the fit tier heavily, then the model's byte size (capability proxy)
+          const score = tier[vd.verdict] * 1e15 + q.bytes
+          if (score > bestScore) { bestScore = score; best = { entry, verdict: vd } }
         }
       }
       setBestPick(best)
