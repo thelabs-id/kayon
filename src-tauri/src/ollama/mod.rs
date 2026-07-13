@@ -163,7 +163,16 @@ pub fn adopt_model(
 
     let dest = PathBuf::from(library_path).join(format!("{}-{}.gguf", model_name, tag));
     if dest.exists() {
-        return Ok((dest.to_string_lossy().to_string(), false));
+        // A file is already there — only treat it as adopted if it IS this blob (same hash).
+        // A stale/foreign file must not be inserted under the trusted Ollama digest.
+        let dest_hash = hash_file(&dest)?;
+        if dest_hash == expected {
+            return Ok((dest.to_string_lossy().to_string(), false));
+        }
+        return Err(anyhow!(
+            "a different file already exists at {} (hash {} ≠ manifest digest {}) — refusing to adopt over it",
+            dest.display(), dest_hash, expected
+        ));
     }
 
     match mode {

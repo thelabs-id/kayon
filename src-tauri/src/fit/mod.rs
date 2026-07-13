@@ -192,7 +192,11 @@ fn evaluate_inner(
         }
 
         let _ = gpu_used; // gpu_used already accounts for weights + on-GPU KV per layer
-        let cpu_remainder = w_total.saturating_sub(ngl as u64 * per_block) + kv;
+        // §7: the CPU-resident remainder is CPU-layer weights + KV for the CPU layers only. The
+        // GPU already holds KV for its offloaded layers, so counting the full KV here would
+        // double-count it against RAM and wrongly downgrade valid splits.
+        let kv_off_gpu = kv.saturating_sub(kv_on_gpu_per_layer * ngl as u64);
+        let cpu_remainder = w_total.saturating_sub(ngl as u64 * per_block) + kv_off_gpu;
         if ngl > 0 && cpu_remainder <= ram_avail {
             (VerdictKind::GpuCpuSplit, ngl, format!(
                 "GPU: {} of {} layers ({:.1} GB) + CPU: {:.1} GB | VRAM avail {:.1} GB, RAM avail {:.1} GB",

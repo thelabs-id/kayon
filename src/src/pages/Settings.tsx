@@ -39,8 +39,14 @@ export default function Settings() {
   const showPreview = async () => { const r = await api.telemetryPreview(); if (r.ok && r.data) setPreview(r.data) }
 
   const adopt = async (m: OllamaModel) => {
+    // OLL-4: cross-volume needs an explicit copy choice (relocate is the other option).
+    let mode: 'copy' | undefined
+    if (!m.sameVolumeAsLibrary) {
+      if (!window.confirm(`${m.name}:${m.tag} is on a different drive. Copy it into the library (${(m.sizeBytes/1024**3).toFixed(1)} GB)? Cancel to relocate the library instead.`)) return
+      mode = 'copy'
+    }
     setAdopting(`${m.name}:${m.tag}`)
-    const r = await api.ollamaAdopt({ name:m.name, tag:m.tag })
+    const r = await api.ollamaAdopt({ name:m.name, tag:m.tag, mode })
     setAdopting(null)
     if (!r.ok) alert('Adopt failed: '+r.error)
     load()

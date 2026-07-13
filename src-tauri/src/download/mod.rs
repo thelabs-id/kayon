@@ -38,7 +38,7 @@ impl DownloadManager {
         target_path: &str,
         total_bytes: u64,
         sha256_expected: &str,
-    ) -> Result<DownloadState> {
+    ) -> Result<(DownloadState, bool)> {
         // Honesty guard: never spend bandwidth on a catalog entry whose checksum has not
         // been pinned yet (CAT-6 generator scaffolds these as placeholders). Without a real
         // pinned hash the DL-3 gate can't verify, so we refuse up front instead of
@@ -48,6 +48,14 @@ impl DownloadManager {
             return Err(anyhow!(
                 "checksum not pinned for this entry — the catalog generator (CAT-6) must populate a real SHA-256 before download is allowed"
             ));
+        }
+        // Don't start a second transfer for a target that's already downloading — two tasks
+        // appending to the same GGUF would corrupt it. Return the in-flight row instead.
+        if let Some(existing) = db.list_downloads()?.into_iter().find(|d| {
+            d.target_path == target_path
+                && matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued)
+        }) {
+            return Ok((existing, false)); // already downloading — caller must not spawn again
         }
         let free = free_disk_for_path(target_path)?;
         if free < total_bytes {
@@ -82,7 +90,7 @@ impl DownloadManager {
             eta_seconds: None,
         };
         db.insert_download(&state)?;
-        Ok(state)
+        Ok((state, true))
     }
 
     pub async fn resume_download(

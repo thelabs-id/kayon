@@ -337,15 +337,17 @@ async fn start_download(
         &s.db, &req.model_id, &req.quant_label,
         &quant.source, &target, quant.bytes, &quant.sha256,
     ).await {
-        Ok(state) => {
-            let id = state.id.clone();
-            let db = s.db.clone();
-            let dl = s.dl.clone();
-            tokio::spawn(async move {
-                if let Err(e) = dl.resume_download(&db, &id, None).await {
-                    log::error!("download failed: {}", e);
-                }
-            });
+        Ok((state, is_new)) => {
+            if is_new {
+                let id = state.id.clone();
+                let db = s.db.clone();
+                let dl = s.dl.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = dl.resume_download(&db, &id, None).await {
+                        log::error!("download failed: {}", e);
+                    }
+                });
+            }
             ok_json(state).into_response()
         }
         Err(e) => err_json(&e.to_string()).into_response(),
@@ -388,7 +390,21 @@ async fn ollama_adopt(
         Some(m) => m,
         None => return err_json("no matching Ollama model found for that name:tag").into_response(),
     };
-    let mode = if m.same_volume_as_library { ollama::AdoptMode::Link } else { ollama::AdoptMode::Copy };
+    let mode = if m.same_volume_as_library {
+        ollama::AdoptMode::Link
+    } else {
+        // OLL-4: never silently copy across volumes. Surface both choices unless the user has
+        // explicitly opted into copy this time.
+        match req.mode.as_deref() {
+            Some("copy") => ollama::AdoptMode::Copy,
+            _ => return err_json(&format!(
+                "cross-volume: the Ollama store for {}:{} is on a different drive than the library. \
+                 Choose to copy the blob into the library (~{} bytes, disk pre-flight applies) by \
+                 re-sending with mode=\"copy\", or relocate the library onto the Ollama volume (OLL-4).",
+                m.name, m.tag, m.size_bytes
+            )).into_response(),
+        }
+    };
 
     // Adoption hashes the blob (OLL-3 gate) which is CPU/IO-bound for multi-GB models; run it on
     // the blocking pool so it never stalls the async runtime handling other requests.
@@ -705,6 +721,11 @@ struct OllamaAdoptReq {
     // from the Ollama manifest scan (never trusted from the client).
     name: String,
     tag: String,
+    // For cross-volume stores the user must explicitly choose "copy" (OLL-4). Same-volume hard-
+    // links need no mode. Absent + cross-volume → the handler returns the choice rather than
+    // silently copying gigabytes.
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
