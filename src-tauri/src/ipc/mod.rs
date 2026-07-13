@@ -193,6 +193,12 @@ pub struct InstalledModel {
     pub installed_at: chrono::DateTime<chrono::Utc>,
     pub ollama_tag: Option<String>,
     pub ollama_digest: Option<String>,
+    /// GGUF architecture, recorded at install time (for the OLL-6 runtime gate in the library).
+    #[serde(default)]
+    pub architecture: Option<String>,
+    /// Computed for the library listing: the bundled runtime can't load this architecture.
+    #[serde(default)]
+    pub needs_newer_runtime: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

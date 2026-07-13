@@ -99,8 +99,10 @@ export default function Library() {
                     ? <VerdictBadge verdict={verdicts[m.id].verdict} showTooltip explainability={verdicts[m.id].explainability} nGpuLayers={verdicts[m.id].nGpuLayers}/>
                     : <span className="text-xs text-muted">…</span>}</td>
                   <td className="mono text-xs">{m.sha256.substring(0,16)}...</td>
-                  <td style={{display:'flex',gap:6}}>
-                    <button className="btn btn-primary btn-sm" onClick={()=>loadModel(m)}>Load & Chat</button>
+                  <td style={{display:'flex',gap:6,alignItems:'center'}}>
+                    {m.needsNewerRuntime
+                      ? <span className="badge badge-warning" title={`Architecture '${m.architecture||'?'}' needs a newer llama.cpp runtime than the bundled one (OLL-6).`}>Needs newer runtime</span>
+                      : <button className="btn btn-primary btn-sm" onClick={()=>loadModel(m)}>Load & Chat</button>}
                     <button className="btn btn-ghost btn-sm" onClick={()=>setConfirm(m)} title="Delete">Del</button>
                   </td>
                 </tr>

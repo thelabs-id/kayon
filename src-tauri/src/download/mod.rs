@@ -231,6 +231,9 @@ impl DownloadManager {
 
         // Enter the verified file into the library (DL-4, LIB-2). Idempotent on path.
         let existing = db.find_installed_by_path(&state.target_path)?;
+        let architecture = crate::gguf::parse_gguf_header(std::path::Path::new(&state.target_path))
+            .ok()
+            .and_then(|h| crate::gguf::arch_from_header(&h));
         let model = InstalledModel {
             id: existing.map(|m| m.id).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             model_id: state.model_id.clone(),
@@ -242,6 +245,8 @@ impl DownloadManager {
             installed_at: Utc::now(),
             ollama_tag: None,
             ollama_digest: None,
+            architecture,
+            needs_newer_runtime: false,
         };
         db.insert_installed_model(&model)?;
         Ok(())

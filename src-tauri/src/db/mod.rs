@@ -42,7 +42,8 @@ impl Database {
                 source TEXT NOT NULL CHECK(source IN ('downloaded','adopted')),
                 installed_at TEXT NOT NULL,
                 ollama_tag TEXT,
-                ollama_digest TEXT
+                ollama_digest TEXT,
+                architecture TEXT
             );
             CREATE TABLE IF NOT EXISTS downloads (
                 id TEXT PRIMARY KEY,
@@ -93,6 +94,9 @@ impl Database {
                 value TEXT NOT NULL
             );",
         )?;
+        // Migration for DBs created before the architecture column existed. Ignore the error if
+        // the column is already present.
+        let _ = conn.execute("ALTER TABLE installed_models ADD COLUMN architecture TEXT", []);
         Ok(())
     }
 
@@ -142,13 +146,13 @@ impl Database {
         };
         conn.execute(
             "INSERT OR REPLACE INTO installed_models
-             (id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest, architecture)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 m.id, m.model_id, m.quant_label, m.path,
                 m.bytes as i64, m.sha256, src,
                 m.installed_at.to_rfc3339(),
-                m.ollama_tag, m.ollama_digest,
+                m.ollama_tag, m.ollama_digest, m.architecture,
             ],
         )?;
         Ok(())
@@ -171,13 +175,15 @@ impl Database {
             installed_at: parse_dt(row.get::<_, String>(7)?),
             ollama_tag: row.get(8)?,
             ollama_digest: row.get(9)?,
+            architecture: row.get(10)?,
+            needs_newer_runtime: false, // computed in the library listing, not stored
         })
     }
 
     pub fn list_installed_models(&self) -> Result<Vec<InstalledModel>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest
+            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest, architecture
              FROM installed_models ORDER BY installed_at DESC",
         )?;
         let rows = stmt.query_map([], Self::map_installed)?;
@@ -187,7 +193,7 @@ impl Database {
     pub fn get_installed_model(&self, id: &str) -> Result<Option<InstalledModel>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row(
-            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest
+            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest, architecture
              FROM installed_models WHERE id = ?1",
             params![id],
             Self::map_installed,
@@ -197,7 +203,7 @@ impl Database {
     pub fn find_installed_by_path(&self, path: &str) -> Result<Option<InstalledModel>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row(
-            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest
+            "SELECT id, model_id, quant_label, path, bytes, sha256, source, installed_at, ollama_tag, ollama_digest, architecture
              FROM installed_models WHERE path = ?1",
             params![path],
             Self::map_installed,

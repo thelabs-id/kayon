@@ -291,7 +291,18 @@ async fn local_verdict(
 
 async fn library_list(State(s): State<AppState>) -> impl IntoResponse {
     match library::list_installed(&s.db) {
-        Ok(models) => ok_json(models).into_response(),
+        Ok(mut models) => {
+            // Recompute the OLL-6 runtime gate for the listing so unsupported-arch models stay
+            // marked "needs newer runtime" and the UI won't present a Load & Chat that fails.
+            let supported = runtime::RuntimeManager::supported_runtime_archs();
+            for m in &mut models {
+                m.needs_newer_runtime = match m.architecture.as_deref() {
+                    Some(a) => !supported.iter().any(|s| s.eq_ignore_ascii_case(a)),
+                    None => false,
+                };
+            }
+            ok_json(models).into_response()
+        }
         Err(e) => err_json(&e.to_string()).into_response(),
     }
 }
@@ -428,6 +439,8 @@ async fn ollama_adopt(
                 installed_at: chrono::Utc::now(),
                 ollama_tag: Some(format!("{}:{}", m.name, m.tag)),
                 ollama_digest: Some(m.digest.clone()),
+                architecture: m.architecture.clone(),
+                needs_newer_runtime: m.needs_newer_runtime,
             };
             if let Err(e) = s.db.insert_installed_model(&model) {
                 return err_json(&e.to_string()).into_response();
@@ -547,12 +560,16 @@ async fn runtime_load(
     let cat_entry = catalog::get_active_catalog().ok()
         .and_then(|c| c.entries.into_iter().find(|e| e.id == model.model_id));
     if let Some(min) = cat_entry.as_ref().and_then(|e| e.arch.runtime_min_version.clone()) {
-        let bundled = runtime::RuntimeManager::bundled_runtime_version();
-        if !runtime_version_satisfies(&bundled, &min) {
-            return err_json(&format!(
+        match runtime::RuntimeManager::bundled_runtime_version() {
+            Some(bundled) if runtime_version_satisfies(&bundled, &min) => {}
+            Some(bundled) => return err_json(&format!(
                 "'{}' needs llama.cpp runtime >= {} but the bundled runtime is {} — needs newer runtime (RUN-1)",
                 model.model_id, min, bundled
-            )).into_response();
+            )).into_response(),
+            None => return err_json(&format!(
+                "'{}' declares runtimeMinVersion {} but the bundled runtime version is unknown — refusing to launch (set KAYON_RUNTIME_VERSION)",
+                model.model_id, min
+            )).into_response(),
         }
     }
     let runtime_args = cat_entry.as_ref()

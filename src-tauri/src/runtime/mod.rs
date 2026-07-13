@@ -182,10 +182,12 @@ impl RuntimeManager {
         ]
     }
 
-    /// Version of the bundled llama.cpp runtime (RUN-1 / catalog `runtimeMinVersion` gate). Real
-    /// builds set this at package time; overridable via env for testing. Format: llama.cpp build id.
-    pub fn bundled_runtime_version() -> String {
-        std::env::var("KAYON_RUNTIME_VERSION").unwrap_or_else(|_| "b9999".to_string())
+    /// Version of the bundled llama.cpp runtime (RUN-1 / catalog `runtimeMinVersion` gate), or None
+    /// if unknown. Real builds inject `KAYON_RUNTIME_VERSION` at package time. When it's unknown we
+    /// fail CLOSED against a runtimeMinVersion requirement rather than launch a model that may need
+    /// a newer runtime — better to block than to start-and-fail.
+    pub fn bundled_runtime_version() -> Option<String> {
+        std::env::var("KAYON_RUNTIME_VERSION").ok().filter(|s| !s.trim().is_empty())
     }
 
     /// Resolve the `llama-server` binary (RUN-1). Order: `KAYON_LLAMA_SERVER` env override,

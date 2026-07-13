@@ -136,13 +136,24 @@ pub async fn fetch_remote_catalog(
         .map_err(|_| anyhow!("signature verification failed"))?;
 
     let mut catalog: Catalog = serde_json::from_slice(&json_bytes)?;
+    if catalog.schema_version != SUPPORTED_SCHEMA_VERSION {
+        return Err(anyhow!(
+            "remote catalog schemaVersion {} unsupported (this build understands {}) — not adopting",
+            catalog.schema_version, SUPPORTED_SCHEMA_VERSION
+        ));
+    }
     catalog.verified_signature = Some("verified".to_string());
 
     Ok((catalog, json_bytes, sig_bytes))
 }
 
+/// The catalog schema version this build understands. A remote manifest with a different
+/// schemaVersion is rejected (CAT-5) — a future v2 that still deserializes could misinterpret
+/// download/checksum/runtime fields, so we never adopt it as if it were v1.
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+
 pub fn maybe_update_catalog(local: &Catalog, remote: &Catalog) -> bool {
-    remote.revision > local.revision
+    remote.schema_version == SUPPORTED_SCHEMA_VERSION && remote.revision > local.revision
 }
 
 #[cfg(test)]

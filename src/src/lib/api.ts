@@ -158,6 +158,8 @@ export interface InstalledModel {
   installedAt: string
   ollamaTag?: string
   ollamaDigest?: string
+  architecture?: string
+  needsNewerRuntime?: boolean
 }
 
 export interface DownloadState {
