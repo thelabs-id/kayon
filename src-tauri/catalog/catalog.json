@@ -1,285 +1,272 @@
 {
-  "schemaVersion": 1,
-  "revision": 3,
-  "generatedAt": "2025-01-01T00:00:00Z",
-  "source": "bundled",
-  "verifiedSignature": null,
   "entries": [
     {
-      "id": "smollm2-135m-instruct",
-      "family": "SmolLM2",
-      "params": "135M",
-      "license": "Apache-2.0",
-      "capabilities": {
-        "tools": false,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "llama",
+        "attentionType": null,
         "blockCount": 30,
+        "contextLength": 8192,
+        "embeddingLength": 576,
         "headCount": 9,
         "headCountKv": 3,
-        "embeddingLength": 576,
-        "contextLength": 8192,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "SmolLM2",
+      "id": "smollm2-135m-instruct",
+      "license": "Apache-2.0",
+      "params": "135M",
       "quants": [
         {
-          "label": "Q8_0",
           "bytes": 144811360,
+          "label": "Q8_0",
+          "runtimeArgs": [],
           "sha256": "5a1395716f7913741cc51d98581b9b1228d80987a9f7d3664106742eb06bba83",
-          "source": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf",
-          "runtimeArgs": []
+          "source": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf"
         }
       ]
     },
     {
-      "id": "qwen2.5-0.5b-instruct",
-      "family": "Qwen",
-      "params": "0.5B",
-      "license": "Apache-2.0",
-      "capabilities": {
-        "tools": true,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "qwen2",
+        "attentionType": null,
         "blockCount": 24,
+        "contextLength": 32768,
+        "embeddingLength": 896,
         "headCount": 14,
         "headCountKv": 2,
-        "embeddingLength": 896,
-        "contextLength": 32768,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": true,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen2.5-0.5b-instruct",
+      "license": "Apache-2.0",
+      "params": "0.5B",
       "quants": [
         {
-          "label": "Q4_K_M",
           "bytes": 491400032,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
           "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
-          "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-          "runtimeArgs": []
+          "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
         }
       ]
     },
     {
-      "id": "llama-3.2-3b-instruct",
-      "family": "Llama",
-      "params": "3.21B",
-      "license": "Llama 3.2 Community License",
-      "capabilities": {
-        "tools": true,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "llama",
+        "attentionType": null,
         "blockCount": 28,
+        "contextLength": 131072,
+        "embeddingLength": 3072,
         "headCount": 24,
         "headCountKv": 8,
-        "embeddingLength": 3072,
-        "contextLength": 4096,
-        "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "keyLength": 128,
+        "runtimeMinVersion": null,
+        "valueLength": 128
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": true,
+        "vision": false
+      },
+      "family": "Llama",
+      "id": "llama-3.2-3b-instruct",
+      "license": "Llama 3.2 Community License",
+      "params": "3.21B",
       "quants": [
         {
+          "bytes": 2019377696,
           "label": "Q4_K_M",
-          "bytes": 2140535424,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-          "runtimeArgs": []
+          "runtimeArgs": [],
+          "sha256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+          "source": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
         },
         {
+          "bytes": 3421899296,
           "label": "Q8_0",
-          "bytes": 3421895168,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q8_0.gguf",
-          "runtimeArgs": []
+          "runtimeArgs": [],
+          "sha256": "b5607b5090a8280063fff2d706bb3408ca6542341b06aab39c3eca0a28575921",
+          "source": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q8_0.gguf"
         }
       ]
     },
     {
-      "id": "qwen2.5-7b-instruct",
-      "family": "Qwen",
-      "params": "7.62B",
-      "license": "Apache 2.0",
-      "capabilities": {
-        "tools": true,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "qwen2",
+        "attentionType": null,
         "blockCount": 28,
+        "contextLength": 32768,
+        "embeddingLength": 3584,
         "headCount": 28,
         "headCountKv": 4,
-        "embeddingLength": 3584,
-        "contextLength": 8192,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": true,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen2.5-7b-instruct",
+      "license": "Apache-2.0",
+      "params": "7.62B",
       "quants": [
         {
+          "bytes": 4683074240,
           "label": "Q4_K_M",
-          "bytes": 4682633728,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-          "runtimeArgs": [
-            "--jinja"
-          ]
-        },
-        {
-          "label": "Q8_0",
-          "bytes": 8098085888,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q8_0.gguf",
-          "runtimeArgs": [
-            "--jinja"
-          ]
+          "runtimeArgs": [],
+          "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
         }
       ]
     },
     {
-      "id": "phi-3.5-mini-instruct",
-      "family": "Phi",
-      "params": "3.82B",
-      "license": "MIT",
-      "capabilities": {
-        "tools": false,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "phi3",
+        "attentionType": null,
         "blockCount": 32,
+        "contextLength": 131072,
+        "embeddingLength": 3072,
         "headCount": 32,
         "headCountKv": 32,
-        "embeddingLength": 3072,
-        "contextLength": 4096,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Phi",
+      "id": "phi-3.5-mini-instruct",
+      "license": "MIT",
+      "params": "3.82B",
       "quants": [
         {
+          "bytes": 2393232672,
           "label": "Q4_K_M",
-          "bytes": 2454283520,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
-          "runtimeArgs": []
+          "runtimeArgs": [],
+          "sha256": "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
+          "source": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
         }
       ]
     },
     {
-      "id": "gemma-2-9b-it",
-      "family": "Gemma",
-      "params": "9.24B",
-      "license": "Gemma Terms of Use",
-      "capabilities": {
-        "tools": false,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "gemma2",
+        "attentionType": null,
         "blockCount": 42,
+        "contextLength": 8192,
+        "embeddingLength": 3584,
         "headCount": 16,
         "headCountKv": 8,
-        "embeddingLength": 3072,
-        "contextLength": 4096,
         "keyLength": 256,
-        "valueLength": 256,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": 256
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Gemma",
+      "id": "gemma-2-9b-it",
+      "license": "Gemma Terms of Use",
+      "params": "9.24B",
       "quants": [
         {
+          "bytes": 5761057728,
           "label": "Q4_K_M",
-          "bytes": 5665152512,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf",
-          "runtimeArgs": []
+          "runtimeArgs": [],
+          "sha256": "13b2a7b4115bbd0900162edcebe476da1ba1fc24e718e8b40d32f6e300f56dfe",
+          "source": "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf"
         }
       ]
     },
     {
-      "id": "qwen2.5-14b-instruct",
-      "family": "Qwen",
-      "params": "14.27B",
-      "license": "Apache 2.0",
-      "capabilities": {
-        "tools": true,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "qwen2",
-        "blockCount": 40,
+        "attentionType": null,
+        "blockCount": 48,
+        "contextLength": 32768,
+        "embeddingLength": 5120,
         "headCount": 40,
         "headCountKv": 8,
-        "embeddingLength": 5120,
-        "contextLength": 8192,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": true,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen2.5-14b-instruct",
+      "license": "Apache-2.0",
+      "params": "14.27B",
       "quants": [
         {
+          "bytes": 8988110976,
           "label": "Q4_K_M",
-          "bytes": 8832487424,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
-          "runtimeArgs": [
-            "--jinja"
-          ]
+          "runtimeArgs": [],
+          "sha256": "e47ad95dad6ff848b431053b375adb5d39321290ea2c638682577dafca87c008",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf"
         }
       ]
     },
     {
-      "id": "mistral-7b-instruct-v0.3",
-      "family": "Mistral",
-      "params": "7.25B",
-      "license": "Apache 2.0",
-      "capabilities": {
-        "tools": true,
-        "reasoning": false,
-        "vision": false
-      },
       "arch": {
         "architecture": "llama",
+        "attentionType": null,
         "blockCount": 32,
+        "contextLength": 32768,
+        "embeddingLength": 4096,
         "headCount": 32,
         "headCountKv": 8,
-        "embeddingLength": 4096,
-        "contextLength": 32768,
         "keyLength": null,
-        "valueLength": null,
-        "attentionType": null,
-        "runtimeMinVersion": null
+        "runtimeMinVersion": null,
+        "valueLength": null
       },
+      "capabilities": {
+        "reasoning": false,
+        "tools": true,
+        "vision": false
+      },
+      "family": "Mistral",
+      "id": "mistral-7b-instruct-v0.3",
+      "license": "Apache-2.0",
+      "params": "7.25B",
       "quants": [
         {
+          "bytes": 4372812000,
           "label": "Q4_K_M",
-          "bytes": 4490000000,
-          "sha256": "TODO_PLACEHOLDER",
-          "source": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
-          "runtimeArgs": []
+          "runtimeArgs": [],
+          "sha256": "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6",
+          "source": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
         }
       ]
     }
-  ]
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "revision": 4,
+  "schemaVersion": 1,
+  "source": "generated",
+  "verifiedSignature": null
 }
