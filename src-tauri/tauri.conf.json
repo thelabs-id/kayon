@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kayon",
+  "version": "1.0.0",
+  "identifier": "id.thelabs.kayon",
+  "build": {
+    "frontendDist": "../src/dist",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Kayon",
+        "width": 1320,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 680,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:9518 http://localhost:9518 http://127.0.0.1:* ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "catalog/catalog.json",
+      "catalog/catalog.json.sig"
+    ],
+    "externalBin": [],
+    "longDescription": "Kayon turns a Windows + NVIDIA machine into an honest, private, local LLM workstation: real fit verdicts, adopt-in-place from Ollama, and a managed llama.cpp runtime — no account, no cloud.",
+    "shortDescription": "Honest, private, local LLM workstation."
+  }
+}

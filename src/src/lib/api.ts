@@ -1,4 +1,9 @@
-const BASE = ''
+// The Rust API server always listens on 127.0.0.1:9518. In the browser build the UI is served
+// from the same origin (relative works); inside the Tauri window the origin is tauri.localhost,
+// so we address the server absolutely. Using the absolute URL is correct in both.
+const BASE = (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__)
+  ? 'http://127.0.0.1:9518'
+  : ''
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {

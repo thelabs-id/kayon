@@ -22,3 +22,7 @@ Thumbs.db
 
 # Catalog signing private key (never commit)
 /src-tauri/catalog/signing.key
+
+# Tauri
+/src-tauri/gen/
+/src-tauri/icon-src.png
