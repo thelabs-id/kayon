@@ -3,6 +3,8 @@ name = "kayon"
 version = "0.1.0"
 edition = "2021"
 description = "Honest, private, local LLM workstation for Windows + NVIDIA"
+# The Tauri desktop app is the primary binary; catgen/catsign/server are dev/CI tools.
+default-run = "kayon"
 
 # The Tauri desktop app links the shared library; main.rs is a thin launcher.
 [lib]
