@@ -32,11 +32,21 @@ export default function Browser() {
     return m
   }, [verdicts])
 
-  // Rank each model by its BEST quant (lowest order index across all quants), so "best fit leads"
-  // holds even when the first-listed quant doesn't fit but a lighter one does (CAT-3).
-  const bestRank = (e: CatalogEntry) =>
-    Math.min(...e.quants.map(q => order[vMap.get(`${e.id}|${q.label}`)?.verdict || ''] ?? 99), 99)
-  const sorted = useMemo(() => [...catalog].sort((a,b) => bestRank(a) - bestRank(b)),
+  // Rank each model by a combined fit-tier + capability score over ALL its quants, so the computed
+  // best pick leads the page and ties (e.g. several FITS_FULLY models) break by capability, not
+  // catalog order (CAT-3). Higher score = better.
+  const bestScore = (e: CatalogEntry) => {
+    let best = -1
+    for (const q of e.quants) {
+      const v = vMap.get(`${e.id}|${q.label}`)
+      if (!v) continue
+      const tier = 99 - (order[v.verdict] ?? 99) // higher tier = better verdict
+      const s = tier * 1e15 + q.bytes             // then heavier (more capable) quant wins ties
+      if (s > best) best = s
+    }
+    return best
+  }
+  const sorted = useMemo(() => [...catalog].sort((a,b) => bestScore(b) - bestScore(a)),
     [catalog, vMap])
 
   const download = async (entry: CatalogEntry, q: {label:string;bytes:number;sha256:string;source:string}) => {

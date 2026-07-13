@@ -150,7 +150,18 @@ impl DownloadManager {
                 headers.insert("Range", range.parse()?);
             }
 
-            let resp = self.client.get(&state.url).headers(headers).send().await?;
+            let resp = match self.client.get(&state.url).headers(headers).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    // PRIV-5: account for the outbound attempt even when it fails before a response
+                    // (DNS/TLS/connect timeout), so the network log never omits a request we made.
+                    crate::telemetry::log_network_request_full(
+                        db, "GET", &state.url, "download", 0, 0, None, Some(format!("failed: {}", e)),
+                    );
+                    db.set_download_error(download_id, &e.to_string())?;
+                    return Err(e.into());
+                }
+            };
             let http_status = resp.status().as_u16();
             // PRIV-5: log the request at the point it actually fires, with its real status.
             crate::telemetry::log_network_request_full(

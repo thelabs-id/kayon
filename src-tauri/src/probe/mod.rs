@@ -269,22 +269,13 @@ pub fn poll_gpu_telemetry(gpu_index: u32) -> Option<GpuTelemetry> {
     })
 }
 
+// Both go through probe_gpus(), which applies the v1 compute-capability filter and the nvidia-smi
+// fallback. This keeps the fit engine consistent with the dashboard: an unsupported/absent GPU
+// yields 0 VRAM → the RAM-based degraded verdicts (HW-6), never a GPU-fit on unsupported hardware.
 pub fn get_vram_free() -> u64 {
-    if let Ok(nvml) = Nvml::init() {
-        if let Ok(m) = nvml.device_by_index(0).and_then(|d| d.memory_info()) {
-            return m.free;
-        }
-    }
-    // Fall back to nvidia-smi so the fit engine sees real VRAM when NVML is unavailable (HW-2/§2),
-    // matching the dashboard's fallback and avoiding a bogus CPU-only downgrade.
-    nvidia_smi_probe().first().map(|g| g.telemetry.vram_free_bytes).unwrap_or(0)
+    probe_gpus().first().map(|g| g.telemetry.vram_free_bytes).unwrap_or(0)
 }
 
 pub fn get_vram_total() -> u64 {
-    if let Ok(nvml) = Nvml::init() {
-        if let Ok(m) = nvml.device_by_index(0).and_then(|d| d.memory_info()) {
-            return m.total;
-        }
-    }
-    nvidia_smi_probe().first().map(|g| g.total_vram_bytes).unwrap_or(0)
+    probe_gpus().first().map(|g| g.total_vram_bytes).unwrap_or(0)
 }
