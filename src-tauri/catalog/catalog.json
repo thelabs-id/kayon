@@ -4,11 +4,50 @@
       "arch": {
         "architecture": "llama",
         "attentionType": null,
-        "blockCount": 30,
-        "contextLength": 8192,
-        "embeddingLength": 576,
-        "headCount": 9,
-        "headCountKv": 3,
+        "blockCount": 16,
+        "contextLength": 131072,
+        "embeddingLength": 2048,
+        "headCount": 32,
+        "headCountKv": 8,
+        "keyLength": 64,
+        "runtimeMinVersion": null,
+        "valueLength": 64
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Llama",
+      "id": "llama-3-2-1b-instruct",
+      "license": "llama3.2",
+      "params": "1B",
+      "quants": [
+        {
+          "bytes": 807694464,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+          "source": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 1321083008,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
+          "source": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
+        "architecture": "llama",
+        "attentionType": null,
+        "blockCount": 32,
+        "contextLength": 131072,
+        "embeddingLength": 4096,
+        "headCount": 32,
+        "headCountKv": 8,
         "keyLength": null,
         "runtimeMinVersion": null,
         "valueLength": null
@@ -18,49 +57,63 @@
         "tools": false,
         "vision": false
       },
-      "family": "SmolLM2",
-      "id": "smollm2-135m-instruct",
-      "license": "Apache-2.0",
-      "params": "135M",
+      "family": "Llama",
+      "id": "meta-llama-3-1-8b-instruct",
+      "license": "llama3.1",
+      "params": "8B",
       "quants": [
         {
-          "bytes": 144811360,
+          "bytes": 4920739232,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c",
+          "source": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 8540775840,
           "label": "Q8_0",
           "runtimeArgs": [],
-          "sha256": "5a1395716f7913741cc51d98581b9b1228d80987a9f7d3664106742eb06bba83",
-          "source": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf"
+          "sha256": "9da71c45c90a821809821244d4971e5e5dfad7eb091f0b8ff0546392393b6283",
+          "source": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
         }
       ]
     },
     {
       "arch": {
-        "architecture": "qwen2",
+        "architecture": "gemma2",
         "attentionType": null,
-        "blockCount": 24,
-        "contextLength": 32768,
-        "embeddingLength": 896,
-        "headCount": 14,
-        "headCountKv": 2,
-        "keyLength": null,
+        "blockCount": 26,
+        "contextLength": 8192,
+        "embeddingLength": 2304,
+        "headCount": 8,
+        "headCountKv": 4,
+        "keyLength": 256,
         "runtimeMinVersion": null,
-        "valueLength": null
+        "valueLength": 256
       },
       "capabilities": {
         "reasoning": false,
-        "tools": true,
+        "tools": false,
         "vision": false
       },
-      "family": "Qwen",
-      "id": "qwen2.5-0.5b-instruct",
-      "license": "Apache-2.0",
-      "params": "0.5B",
+      "family": "Gemma",
+      "id": "gemma-2-2b-it",
+      "license": "gemma",
+      "params": "2B",
       "quants": [
         {
-          "bytes": 491400032,
+          "bytes": 1708582752,
           "label": "Q4_K_M",
           "runtimeArgs": [],
-          "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
-          "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          "sha256": "e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787",
+          "source": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 2784495456,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "2d448a9aab894b8e8e18168cf3f490cb9f65632222f29f93514ac9ecc754debe",
+          "source": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q8_0.gguf"
         }
       ]
     },
@@ -79,13 +132,13 @@
       },
       "capabilities": {
         "reasoning": false,
-        "tools": true,
+        "tools": false,
         "vision": false
       },
       "family": "Llama",
-      "id": "llama-3.2-3b-instruct",
-      "license": "Llama 3.2 Community License",
-      "params": "3.21B",
+      "id": "llama-3-2-3b-instruct",
+      "license": "llama3.2",
+      "params": "3B",
       "quants": [
         {
           "bytes": 2019377696,
@@ -105,6 +158,45 @@
     },
     {
       "arch": {
+        "architecture": "gemma4",
+        "attentionType": null,
+        "blockCount": 35,
+        "contextLength": 131072,
+        "embeddingLength": 1536,
+        "headCount": 8,
+        "headCountKv": 1,
+        "keyLength": 512,
+        "runtimeMinVersion": null,
+        "valueLength": 512
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Gemma",
+      "id": "gemma-4-e2b-it",
+      "license": "apache-2.0",
+      "params": "2B",
+      "quants": [
+        {
+          "bytes": 3462678272,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "b5310340b3a23d31655d7119d100d5df1b2d8ee17b3ca8b0a23ad7e9eb5fa705",
+          "source": "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 4967495424,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "f1a9243ad2da99b3c4706dd0d549b9dcb0a3f49c7e1a46e01f9f582f876265b0",
+          "source": "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
         "architecture": "qwen2",
         "attentionType": null,
         "blockCount": 28,
@@ -118,13 +210,13 @@
       },
       "capabilities": {
         "reasoning": false,
-        "tools": true,
+        "tools": false,
         "vision": false
       },
       "family": "Qwen",
-      "id": "qwen2.5-7b-instruct",
-      "license": "Apache-2.0",
-      "params": "7.62B",
+      "id": "qwen2-5-7b-instruct",
+      "license": "apache-2.0",
+      "params": "7B",
       "quants": [
         {
           "bytes": 4683074240,
@@ -132,53 +224,28 @@
           "runtimeArgs": [],
           "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
           "source": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-        }
-      ]
-    },
-    {
-      "arch": {
-        "architecture": "phi3",
-        "attentionType": null,
-        "blockCount": 32,
-        "contextLength": 131072,
-        "embeddingLength": 3072,
-        "headCount": 32,
-        "headCountKv": 32,
-        "keyLength": null,
-        "runtimeMinVersion": null,
-        "valueLength": null
-      },
-      "capabilities": {
-        "reasoning": false,
-        "tools": false,
-        "vision": false
-      },
-      "family": "Phi",
-      "id": "phi-3.5-mini-instruct",
-      "license": "MIT",
-      "params": "3.82B",
-      "quants": [
+        },
         {
-          "bytes": 2393232672,
-          "label": "Q4_K_M",
+          "bytes": 8098525888,
+          "label": "Q8_0",
           "runtimeArgs": [],
-          "sha256": "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
-          "source": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
+          "sha256": "9c6a6e61664446321d9c0dd7ee28a0d03914277609e21bc0e1fce4abe780ce1b",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q8_0.gguf"
         }
       ]
     },
     {
       "arch": {
-        "architecture": "gemma2",
+        "architecture": "gemma4",
         "attentionType": null,
-        "blockCount": 42,
-        "contextLength": 8192,
-        "embeddingLength": 3584,
+        "blockCount": 30,
+        "contextLength": 262144,
+        "embeddingLength": 2816,
         "headCount": 16,
-        "headCountKv": 8,
-        "keyLength": 256,
+        "headCountKv": 16,
+        "keyLength": 512,
         "runtimeMinVersion": null,
-        "valueLength": 256
+        "valueLength": 512
       },
       "capabilities": {
         "reasoning": false,
@@ -186,16 +253,23 @@
         "vision": false
       },
       "family": "Gemma",
-      "id": "gemma-2-9b-it",
-      "license": "Gemma Terms of Use",
-      "params": "9.24B",
+      "id": "gemma-4-26b-a4b-it",
+      "license": "apache-2.0",
+      "params": "26B",
       "quants": [
         {
-          "bytes": 5761057728,
+          "bytes": 17035038112,
           "label": "Q4_K_M",
           "runtimeArgs": [],
-          "sha256": "13b2a7b4115bbd0900162edcebe476da1ba1fc24e718e8b40d32f6e300f56dfe",
-          "source": "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf"
+          "sha256": "e718536fe9b4bd505b07d44ded8f1595053a5d5407315bccf555ce592f33c140",
+          "source": "https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF/resolve/main/google_gemma-4-26B-A4B-it-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 26859859360,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "c077c33e10934288fbc4d80b1f953069e11817cbdfcc1dfe1532d3574307efde",
+          "source": "https://huggingface.co/bartowski/google_gemma-4-26B-A4B-it-GGUF/resolve/main/google_gemma-4-26B-A4B-it-Q8_0.gguf"
         }
       ]
     },
@@ -214,13 +288,13 @@
       },
       "capabilities": {
         "reasoning": false,
-        "tools": true,
+        "tools": false,
         "vision": false
       },
       "family": "Qwen",
-      "id": "qwen2.5-14b-instruct",
-      "license": "Apache-2.0",
-      "params": "14.27B",
+      "id": "qwen2-5-14b-instruct",
+      "license": "apache-2.0",
+      "params": "14B",
       "quants": [
         {
           "bytes": 8988110976,
@@ -228,17 +302,24 @@
           "runtimeArgs": [],
           "sha256": "e47ad95dad6ff848b431053b375adb5d39321290ea2c638682577dafca87c008",
           "source": "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 15701598336,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "23ca481b8226b2492ba8f3eb7af41e0f99d8605c16fb6dec7bc5cf6716b673cf",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q8_0.gguf"
         }
       ]
     },
     {
       "arch": {
-        "architecture": "llama",
+        "architecture": "qwen2",
         "attentionType": null,
-        "blockCount": 32,
+        "blockCount": 64,
         "contextLength": 32768,
-        "embeddingLength": 4096,
-        "headCount": 32,
+        "embeddingLength": 5120,
+        "headCount": 40,
         "headCountKv": 8,
         "keyLength": null,
         "runtimeMinVersion": null,
@@ -246,26 +327,189 @@
       },
       "capabilities": {
         "reasoning": false,
-        "tools": true,
+        "tools": false,
         "vision": false
       },
-      "family": "Mistral",
-      "id": "mistral-7b-instruct-v0.3",
-      "license": "Apache-2.0",
-      "params": "7.25B",
+      "family": "Qwen",
+      "id": "qwen2-5-32b-instruct",
+      "license": "apache-2.0",
+      "params": "32B",
       "quants": [
         {
-          "bytes": 4372812000,
+          "bytes": 19851336576,
           "label": "Q4_K_M",
           "runtimeArgs": [],
-          "sha256": "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6",
-          "source": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+          "sha256": "2e5f6daea180dbc59f65a40641e94d3973b5dbaa32b3c0acf54647fa874e519e",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 34820885376,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "fc5103335689b33d576ebe8bf50b35a5e04ca6f7cf0753c2f2df1079dabbb78f",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
+        "architecture": "qwen35",
+        "attentionType": null,
+        "blockCount": 65,
+        "contextLength": 262144,
+        "embeddingLength": 5120,
+        "headCount": 24,
+        "headCountKv": 4,
+        "keyLength": 256,
+        "runtimeMinVersion": null,
+        "valueLength": 256
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen3-6-27b",
+      "license": "apache-2.0",
+      "params": "27B",
+      "quants": [
+        {
+          "bytes": 17984872960,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "8739a0cbb80036e5dbdced2085f142b8ba86e3235db8b8039b3769fe5fc70843",
+          "source": "https://huggingface.co/bartowski/Qwen_Qwen3.6-27B-GGUF/resolve/main/Qwen_Qwen3.6-27B-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 29116387840,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "aca14ee02bc555ce6703fd0e7d4518c92e731bc3b3d05b1af428fd015c28286f",
+          "source": "https://huggingface.co/bartowski/Qwen_Qwen3.6-27B-GGUF/resolve/main/Qwen_Qwen3.6-27B-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
+        "architecture": "qwen2",
+        "attentionType": null,
+        "blockCount": 28,
+        "contextLength": 32768,
+        "embeddingLength": 3584,
+        "headCount": 28,
+        "headCountKv": 4,
+        "keyLength": null,
+        "runtimeMinVersion": null,
+        "valueLength": null
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen2-5-coder-7b-instruct",
+      "license": "apache-2.0",
+      "params": "7B",
+      "quants": [
+        {
+          "bytes": 4683074336,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "1664fccab734674a50763490a8c6931b70e3f2f8ec10031b54806d30e5f956b6",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 8098525984,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "ddabea51a3751a6412f06a8beaf9818a3e3e6931596337458407726220097071",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
+        "architecture": "qwen2",
+        "attentionType": null,
+        "blockCount": 48,
+        "contextLength": 32768,
+        "embeddingLength": 5120,
+        "headCount": 40,
+        "headCountKv": 8,
+        "keyLength": null,
+        "runtimeMinVersion": null,
+        "valueLength": null
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "qwen2-5-coder-14b-instruct",
+      "license": "apache-2.0",
+      "params": "14B",
+      "quants": [
+        {
+          "bytes": 8988111072,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "2946d28c9e1bb2bcae6d42e8678863a31775df6f740315c7d7e6d6b6411f5937",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 15701598432,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "ceed8d9126648af71bb5b3d1e69c43b25689752ea2c42204a48fea202605adc5",
+          "source": "https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-14B-Instruct-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "arch": {
+        "architecture": "qwen2",
+        "attentionType": null,
+        "blockCount": 28,
+        "contextLength": 131072,
+        "embeddingLength": 3584,
+        "headCount": 28,
+        "headCountKv": 4,
+        "keyLength": null,
+        "runtimeMinVersion": null,
+        "valueLength": null
+      },
+      "capabilities": {
+        "reasoning": false,
+        "tools": false,
+        "vision": false
+      },
+      "family": "Qwen",
+      "id": "deepseek-r1-distill-qwen-7b",
+      "license": "see model card",
+      "params": "7B",
+      "quants": [
+        {
+          "bytes": 4683073504,
+          "label": "Q4_K_M",
+          "runtimeArgs": [],
+          "sha256": "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+          "source": "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+        },
+        {
+          "bytes": 8098525152,
+          "label": "Q8_0",
+          "runtimeArgs": [],
+          "sha256": "cae89f90c4c2f1894c95393903d2a9776aea7083023ae6cd285b1cc7adafc323",
+          "source": "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q8_0.gguf"
         }
       ]
     }
   ],
   "generatedAt": "1970-01-01T00:00:00Z",
-  "revision": 4,
+  "revision": 5,
   "schemaVersion": 1,
   "source": "generated",
   "verifiedSignature": null

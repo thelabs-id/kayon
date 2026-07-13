@@ -42,6 +42,12 @@
     ],
     "externalBin": [],
     "longDescription": "Kayon turns a Windows + NVIDIA machine into an honest, private, local LLM workstation: real fit verdicts, adopt-in-place from Ollama, and a managed llama.cpp runtime — no account, no cloud.",
-    "shortDescription": "Honest, private, local LLM workstation."
+    "shortDescription": "Honest, private, local LLM workstation.",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

@@ -68,6 +68,37 @@ pub fn start_api_server() {
         });
     }
 
+    // CAT-5/CAT-7: refresh the signed catalog from the trusted remote on launch, so the auto-
+    // discovered model list stays current without the user doing anything. This is an explicitly
+    // allowed network call (PRIV-1: "catalog updates"), it is logged at egress (PRIV-5), and it is
+    // independently controllable — a user can turn it off by setting `catalog_auto_refresh=off`.
+    // It never downloads model weights; only the small signed JSON + signature. A newer revision is
+    // adopted only after signature verification (fetch_remote_catalog); a failure is non-fatal and
+    // leaves the bundled/cached catalog in place.
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            if db.get_preference("catalog_auto_refresh").as_deref() == Some("off") {
+                log::info!("catalog auto-refresh disabled by preference; using bundled/cached catalog");
+                return;
+            }
+            match catalog::get_active_catalog() {
+                Ok(local) => match catalog::fetch_remote_catalog(&db).await {
+                    Ok((remote, json_bytes, sig_bytes)) => {
+                        if catalog::maybe_update_catalog(&local, &remote) {
+                            let _ = catalog::save_local_catalog_raw(&json_bytes, &sig_bytes);
+                            log::info!("catalog updated on launch: rev {} → {}", local.revision, remote.revision);
+                        } else {
+                            log::info!("catalog up to date on launch (rev {})", local.revision);
+                        }
+                    }
+                    Err(e) => log::warn!("catalog refresh on launch failed (keeping current): {}", e),
+                },
+                Err(e) => log::warn!("could not load local catalog for launch refresh: {}", e),
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/api/hardware", get(hardware))
         .route("/api/hardware/stream", get(hardware_stream))
