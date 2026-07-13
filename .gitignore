@@ -26,3 +26,6 @@ Thumbs.db
 # Tauri
 /src-tauri/gen/
 /src-tauri/icon-src.png
+
+# Bundled llama-server runtime (large; staged at build time, not committed)
+/src-tauri/binaries/

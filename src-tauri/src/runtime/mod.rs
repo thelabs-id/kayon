@@ -213,18 +213,20 @@ impl RuntimeManager {
 
     /// Resolve the `llama-server` binary (RUN-1). Order: `KAYON_LLAMA_SERVER` env override,
     /// else the bundled sidecar under the crate's `binaries/` dir, else the name on PATH.
+    /// Resolve the `llama-server` binary (RUN-1). The runtime is bundled as a Tauri sidecar so it
+    /// works out of the box with no user setup. Resolution order:
+    ///   1. installed layout: `<exe_dir>/resources/binaries/llama/llama-server.exe` (Tauri resources)
+    ///   2. `<exe_dir>/binaries/llama/llama-server.exe` (portable layout)
+    ///   3. dev tree: `<crate>/binaries/llama/llama-server.exe`
+    ///   4. `KAYON_LLAMA_SERVER` env override (for a custom/CUDA build)
+    ///   5. `llama-server.exe` on PATH
     pub fn llama_server_binary() -> String {
-        if let Ok(p) = std::env::var("KAYON_LLAMA_SERVER") {
-            if !p.trim().is_empty() {
-                return p;
-            }
-        }
-        // Installed layout: the sidecar sits next to (or in binaries/ beside) the running exe.
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 for cand in [
+                    dir.join("resources").join("binaries").join("llama").join("llama-server.exe"),
+                    dir.join("binaries").join("llama").join("llama-server.exe"),
                     dir.join("llama-server.exe"),
-                    dir.join("binaries").join("llama-server.exe"),
                 ] {
                     if cand.is_file() {
                         return cand.to_string_lossy().to_string();
@@ -232,12 +234,16 @@ impl RuntimeManager {
                 }
             }
         }
-        // Dev tree fallback.
-        let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join("llama-server.exe");
-        if bundled.is_file() {
-            return bundled.to_string_lossy().to_string();
+        let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries").join("llama").join("llama-server.exe");
+        if dev.is_file() {
+            return dev.to_string_lossy().to_string();
+        }
+        // Explicit override (e.g. a custom CUDA build) or PATH as a last resort.
+        if let Ok(p) = std::env::var("KAYON_LLAMA_SERVER") {
+            if !p.trim().is_empty() {
+                return p;
+            }
         }
         "llama-server.exe".to_string()
     }

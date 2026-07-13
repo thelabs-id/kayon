@@ -36,7 +36,8 @@
     ],
     "resources": [
       "catalog/catalog.json",
-      "catalog/catalog.json.sig"
+      "catalog/catalog.json.sig",
+      "binaries/llama/*"
     ],
     "externalBin": [],
     "longDescription": "Kayon turns a Windows + NVIDIA machine into an honest, private, local LLM workstation: real fit verdicts, adopt-in-place from Ollama, and a managed llama.cpp runtime — no account, no cloud.",
