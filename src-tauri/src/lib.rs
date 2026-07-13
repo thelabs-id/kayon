@@ -1,8 +1,9 @@
-mod db;
+pub mod db;
 pub mod probe;
 pub mod gguf;
 pub mod fit;
 pub mod catalog;
+pub mod discovery;
 pub mod download;
 pub mod library;
 pub mod ollama;
@@ -68,33 +69,22 @@ pub fn start_api_server() {
         });
     }
 
-    // CAT-5/CAT-7: refresh the signed catalog from the trusted remote on launch, so the auto-
-    // discovered model list stays current without the user doing anything. This is an explicitly
-    // allowed network call (PRIV-1: "catalog updates"), it is logged at egress (PRIV-5), and it is
-    // independently controllable — a user can turn it off by setting `catalog_auto_refresh=off`.
-    // It never downloads model weights; only the small signed JSON + signature. A newer revision is
-    // adopted only after signature verification (fetch_remote_catalog); a failure is non-fatal and
-    // leaves the bundled/cached catalog in place.
+    // CAT-7: discover the model catalog live from Hugging Face on launch, so the list stays current
+    // without any user action or GitHub round-trip. This runs in the background — the bundled signed
+    // catalog renders instantly and is transparently replaced when discovery lands. It is an
+    // explicitly allowed network call (PRIV-1: "catalog updates"), every HF request is logged at
+    // egress (PRIV-5), and it is independently controllable (`catalog_auto_refresh=off`). It never
+    // downloads model weights — only small JSON + each new model's GGUF header. Failure is non-fatal.
     {
         let db = state.db.clone();
         tokio::spawn(async move {
             if db.get_preference("catalog_auto_refresh").as_deref() == Some("off") {
-                log::info!("catalog auto-refresh disabled by preference; using bundled/cached catalog");
+                log::info!("catalog discovery disabled by preference; using bundled/cached catalog");
                 return;
             }
-            match catalog::get_active_catalog() {
-                Ok(local) => match catalog::fetch_remote_catalog(&db).await {
-                    Ok((remote, json_bytes, sig_bytes)) => {
-                        if catalog::maybe_update_catalog(&local, &remote) {
-                            let _ = catalog::save_local_catalog_raw(&json_bytes, &sig_bytes);
-                            log::info!("catalog updated on launch: rev {} → {}", local.revision, remote.revision);
-                        } else {
-                            log::info!("catalog up to date on launch (rev {})", local.revision);
-                        }
-                    }
-                    Err(e) => log::warn!("catalog refresh on launch failed (keeping current): {}", e),
-                },
-                Err(e) => log::warn!("could not load local catalog for launch refresh: {}", e),
+            match run_discovery(&db).await {
+                Ok(n) => log::info!("catalog discovered from Hugging Face on launch: {} models", n),
+                Err(e) => log::warn!("catalog discovery on launch failed (keeping current): {}", e),
             }
         });
     }
@@ -266,23 +256,28 @@ async fn get_catalog(State(_s): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// Run one live discovery pass against Hugging Face and cache the result (CAT-7). The currently
+/// active catalog seeds the arch cache so already-known models don't re-fetch their headers. Every
+/// HF request is logged at egress (PRIV-5). Returns the number of models discovered.
+async fn run_discovery(db: &Arc<db::Database>) -> anyhow::Result<usize> {
+    let seed = catalog::get_active_catalog().unwrap_or_else(|_| catalog::empty_catalog());
+    // Monotonic revision so a fresh discovery supersedes the cache/bundled seed (get_active_catalog
+    // guards on revision). Unix seconds is monotonic and dwarfs the small bundled revisions.
+    let revision = chrono::Utc::now().timestamp().max(0) as u64;
+    let authors: Vec<String> = discovery::TRUSTED_AUTHORS.iter().map(|s| s.to_string()).collect();
+    let discovered = discovery::discover_catalog(Some(db), &authors, 20, revision, &seed).await?;
+    let n = discovered.entries.len();
+    catalog::save_discovered_catalog(&discovered)?;
+    Ok(n)
+}
+
 async fn refresh_catalog(State(s): State<AppState>) -> impl IntoResponse {
-    match catalog::get_active_catalog() {
-        Ok(local) => {
-            // fetch_remote_catalog logs both GETs at egress and verifies the signature (PRIV-5,
-            // CAT-5). We cache the exact verified bytes only when the revision is strictly newer.
-            match catalog::fetch_remote_catalog(&s.db).await {
-                Ok((remote, json_bytes, sig_bytes)) => {
-                    if catalog::maybe_update_catalog(&local, &remote) {
-                        let _ = catalog::save_local_catalog_raw(&json_bytes, &sig_bytes);
-                        ok_json(remote).into_response()
-                    } else {
-                        ok_json(local).into_response()
-                    }
-                }
-                Err(e) => err_json(&e.to_string()).into_response(),
-            }
-        }
+    // Re-discover from Hugging Face on demand, then return the now-active catalog (CAT-7).
+    match run_discovery(&s.db).await {
+        Ok(_) => match catalog::get_active_catalog() {
+            Ok(c) => ok_json(c).into_response(),
+            Err(e) => err_json(&e.to_string()).into_response(),
+        },
         Err(e) => err_json(&e.to_string()).into_response(),
     }
 }

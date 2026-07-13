@@ -45,9 +45,10 @@ export default function Settings() {
         <div className="panel">
           <span className="mkey">Catalog</span>
           <div className="speclist" style={{ marginTop: 8 }}>
-            <div className="specr" style={{ borderTop: 0, paddingTop: 0 }}><span className="speck">Revision</span><span className="specv">r{catalog?.revision ?? '?'} · ed25519 {catalog?.verifiedSignature === 'verified' ? '✓' : '—'}</span></div>
+            <div className="specr" style={{ borderTop: 0, paddingTop: 0 }}><span className="speck">Revision</span><span className="specv">r{catalog?.revision ?? '?'}</span></div>
+            <div className="specr"><span className="speck">Source</span><span className="specv" title={catalog?.source === 'huggingface' ? 'Discovered live from Hugging Face; every quant checksum-pinned to HF’s published SHA-256 (CAT-7).' : 'Bundled catalog, ed25519-signed and verified against the baked key (CAT-5).'}>{catalog?.source === 'huggingface' ? 'Hugging Face · checksum-pinned' : catalog?.verifiedSignature === 'verified' ? 'bundled · ed25519 ✓' : 'bundled'}</span></div>
             <div className="specr"><span className="speck">Entries</span><span className="specv">{catalog?.entries.length ?? 0} models</span></div>
-            <div className="specr"><span className="speck">Auto-update</span><span className="specv">signature-gated</span></div>
+            <div className="specr"><span className="speck">Auto-update</span><span className="specv">live from Hugging Face</span></div>
           </div>
         </div>
         <div className="panel">
