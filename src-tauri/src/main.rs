@@ -711,7 +711,7 @@ async fn static_handler(
 ) -> impl IntoResponse {
     let path = req.uri().path();
     if !path.starts_with("/api/") {
-        let dist_dir = catalog::crate_root().join("..").join("src").join("dist");
+        let dist_dir = ui_dist_dir();
         // Serve built assets (js/css/svg) directly; SPA-fallback everything else to index.html.
         let rel = path.trim_start_matches('/');
         if !rel.is_empty() && path != "/" {
@@ -741,6 +741,26 @@ fn runtime_version_satisfies(bundled: &str, required: &str) -> bool {
         (Some(b), Some(r)) => b >= r,
         _ => true,
     }
+}
+
+/// Resolve the built UI directory. Order: `KAYON_UI_DIR` override, then `dist/` next to the
+/// installed executable (packaged layout), then the dev source tree. This keeps the app UI
+/// available in packaged builds where the source checkout isn't present.
+fn ui_dist_dir() -> std::path::PathBuf {
+    if let Ok(d) = std::env::var("KAYON_UI_DIR") {
+        if !d.trim().is_empty() {
+            return std::path::PathBuf::from(d);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let packaged = dir.join("dist");
+            if packaged.is_dir() {
+                return packaged;
+            }
+        }
+    }
+    catalog::crate_root().join("..").join("src").join("dist")
 }
 
 fn content_type_for(p: &std::path::Path) -> &'static str {

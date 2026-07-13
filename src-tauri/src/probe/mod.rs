@@ -66,6 +66,11 @@ fn probe_gpus() -> Vec<GpuInfo> {
             )
         });
         let cc = device.cuda_compute_capability().ok();
+        // v1 requires compute capability >= 5.0 (Maxwell+); a lower or unknown GPU isn't one the
+        // bundled CUDA runtime supports, so we skip it → the "no supported GPU" degraded path.
+        if cc.as_ref().map(|c| c.major < 5).unwrap_or(true) {
+            continue;
+        }
         let compute_capability = cc.as_ref().map(|c| format!("{}.{}", c.major, c.minor));
         let arch = cc.and_then(|c| compute_arch(c.major, c.minor));
 
@@ -134,6 +139,11 @@ fn nvidia_smi_probe() -> Vec<GpuInfo> {
         let fnum = |i: usize| get(i).parse::<f32>().unwrap_or(0.0);
         let mhz = |i: usize| get(i).parse::<u32>().unwrap_or(0);
         let cc = get(10);
+        // Same v1 minimum as the NVML path: skip GPUs below compute capability 5.0 / unknown.
+        let cc_major = cc.split('.').next().and_then(|m| m.parse::<i32>().ok());
+        if cc_major.map(|m| m < 5).unwrap_or(true) {
+            continue;
+        }
         gpus.push(GpuInfo {
             name: get(0),
             pci_id: None,
@@ -260,23 +270,21 @@ pub fn poll_gpu_telemetry(gpu_index: u32) -> Option<GpuTelemetry> {
 }
 
 pub fn get_vram_free() -> u64 {
-    let nvml = match Nvml::init() {
-        Ok(n) => n,
-        Err(_) => return 0,
-    };
-    nvml.device_by_index(0)
-        .and_then(|d| d.memory_info())
-        .map(|m| m.free)
-        .unwrap_or(0)
+    if let Ok(nvml) = Nvml::init() {
+        if let Ok(m) = nvml.device_by_index(0).and_then(|d| d.memory_info()) {
+            return m.free;
+        }
+    }
+    // Fall back to nvidia-smi so the fit engine sees real VRAM when NVML is unavailable (HW-2/§2),
+    // matching the dashboard's fallback and avoiding a bogus CPU-only downgrade.
+    nvidia_smi_probe().first().map(|g| g.telemetry.vram_free_bytes).unwrap_or(0)
 }
 
 pub fn get_vram_total() -> u64 {
-    let nvml = match Nvml::init() {
-        Ok(n) => n,
-        Err(_) => return 0,
-    };
-    nvml.device_by_index(0)
-        .and_then(|d| d.memory_info())
-        .map(|m| m.total)
-        .unwrap_or(0)
+    if let Ok(nvml) = Nvml::init() {
+        if let Ok(m) = nvml.device_by_index(0).and_then(|d| d.memory_info()) {
+            return m.total;
+        }
+    }
+    nvidia_smi_probe().first().map(|g| g.total_vram_bytes).unwrap_or(0)
 }
