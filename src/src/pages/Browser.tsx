@@ -53,8 +53,14 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
   openQ: string | null; setOpenQ: (k: string | null) => void; download: (e: CatalogEntry, q: Quant) => void; busyKey: string | null
 }) {
   const caps = [entry.capabilities.tools && 'tools', entry.capabilities.reasoning && 'reasoning', entry.capabilities.vision && 'vision'].filter(Boolean) as string[]
-  const bestV = entry.quants.map(q => vmap.get(`${entry.id}|${q.label}`)).filter(Boolean).sort((a, b) => (order[a!.verdict] ?? 9) - (order[b!.verdict] ?? 9))[0]
-  const pinnedQ = entry.quants.find(q => isPinned(q.sha256))
+  // Best downloadable quant = pinned checksum + a runnable verdict, ranked by fit then size.
+  const dlQuant = entry.quants
+    .filter(q => isPinned(q.sha256))
+    .map(q => ({ q, v: vmap.get(`${entry.id}|${q.label}`) }))
+    .filter(x => x.v && x.v.verdict !== 'EXCEEDS_MACHINE')
+    .sort((a, b) => (order[a.v!.verdict] ?? 9) - (order[b.v!.verdict] ?? 9))[0]?.q
+  const anyPinned = entry.quants.some(q => isPinned(q.sha256))
+  const busyThis = entry.quants.some(q => busyKey === `${entry.id}|${q.label}`)
   return (
     <div className={`mcard ${lead ? 'lead' : ''}`}>
       {lead && <div className="leadbanner"><svg className="kmk" viewBox="0 0 64 64" width="15" height="15"><path className="ko" d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z" style={{ stroke: 'var(--iris)' }} /></svg><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best pick for your machine</span><span className="muted">— the most capable model that fits, computed from real free VRAM.</span></div>}
@@ -67,9 +73,11 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
             {caps.map(c => <span key={c} className="tag">{c}</span>)}
           </div>
         </div>
-        {lead && pinnedQ
-          ? <button className="btn btn-iris" onClick={() => download(entry, pinnedQ)}>Install · {fmtB(pinnedQ.bytes)}</button>
-          : bestV && <span className="mono faint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>best: {bestV.verdict.replace(/_/g, ' ').toLowerCase()}</span>}
+        {dlQuant
+          ? <button className={`btn ${lead ? 'btn-iris' : 'btn-line'} btn-sm`} disabled={busyThis} onClick={() => download(entry, dlQuant)}>{busyThis ? 'Starting…' : `Install · ${dlQuant.label} · ${fmtB(dlQuant.bytes)}`}</button>
+          : anyPinned
+            ? <span className="mono faint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>won't fit</span>
+            : <span className="tag" title="The catalog generator (CAT-6) hasn't pinned a real SHA-256 for this model yet, so it isn't downloadable in this build." style={{ color: 'var(--v-unv)', borderColor: 'color-mix(in oklab, var(--v-unv) 40%, var(--line2))' }}>checksum pending</span>}
       </div>
       <div className="qtable">
         {entry.quants.map(q => {
