@@ -94,16 +94,28 @@ impl DownloadManager {
         let state = db.get_download(download_id)?
             .ok_or_else(|| anyhow!("download not found"))?;
 
+        // Reconcile the resume offset with the ACTUAL bytes on disk, not the last persisted
+        // progress row. After a crash the file may hold chunks written after the last 500 ms DB
+        // update; resuming from the stale DB offset would re-request already-present bytes and
+        // duplicate them, failing the checksum. The file length is the source of truth (DL-1).
+        let disk_len = std::fs::metadata(&state.target_path).map(|m| m.len()).unwrap_or(0);
+        let mut resume_from = disk_len;
+        if state.total_bytes > 0 && resume_from > state.total_bytes {
+            // File is longer than expected (corrupt/over-written) — start clean.
+            let _ = std::fs::remove_file(&state.target_path);
+            resume_from = 0;
+        }
+
         // Only stream from the network when there are still bytes to fetch. A file that is
         // already fully on disk (e.g. resumed after a full download) skips straight to
         // verification instead of issuing a Range request that would 416.
-        let need_network = state.total_bytes == 0 || state.received_bytes < state.total_bytes;
-        let mut total_received = state.received_bytes;
+        let need_network = state.total_bytes == 0 || resume_from < state.total_bytes;
+        let mut total_received = resume_from;
 
         if need_network {
             let mut headers = reqwest::header::HeaderMap::new();
-            if state.received_bytes > 0 {
-                let range = format!("bytes={}-", state.received_bytes);
+            if resume_from > 0 {
+                let range = format!("bytes={}-", resume_from);
                 headers.insert("Range", range.parse()?);
             }
 
@@ -122,7 +134,7 @@ impl DownloadManager {
             // If we asked to resume (received > 0) but the server ignored Range and returned a
             // full 200 body, appending would duplicate the prefix and fail the checksum. Restart
             // cleanly from byte 0 instead (DL-1 correctness).
-            let restart_from_zero = state.received_bytes > 0 && http_status == 200;
+            let restart_from_zero = resume_from > 0 && http_status == 200;
             let mut file = if restart_from_zero {
                 total_received = 0;
                 db.update_download_progress(download_id, 0, &DownloadStatus::Active, 0, None)?;

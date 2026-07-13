@@ -22,10 +22,14 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       const tier: Record<string, number> = { FITS_FULLY: 3, FITS_TIGHT: 2, GPU_CPU_SPLIT: 1 }
       let best: {entry: CatalogEntry; verdict: FitVerdict}|null = null
       let bestScore = -1
+      const isPinned = (sha: string) => /^[0-9a-f]{64}$/i.test((sha || '').trim())
       for (const entry of c.data.entries) {
         for (const q of entry.quants) {
           const vd = vm.get(`${entry.id}|${q.label}`)
           if (!vd || !(vd.verdict in tier)) continue
+          // Only recommend a quant the user can actually install: its checksum must be pinned,
+          // otherwise the one-click install would be refused by the backend.
+          if (!isPinned(q.sha256)) continue
           // weight the fit tier heavily, then the model's byte size (capability proxy)
           const score = tier[vd.verdict] * 1e15 + q.bytes
           if (score > bestScore) { bestScore = score; best = { entry, verdict: vd } }

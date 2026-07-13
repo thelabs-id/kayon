@@ -49,8 +49,11 @@ impl RuntimeManager {
         runtime_args: &[String],
     ) -> Result<()> {
         let mut child_guard = self.child.lock().unwrap();
-        if child_guard.is_some() {
-            return Err(anyhow!("a model is already running — stop it first (RUN-2 strict single)"));
+        // RUN-2 strict single active model: cleanly unload the current sidecar before loading the
+        // next, so one-press Load & Chat (LIB-4) is an atomic switch, not an error.
+        if let Some(mut existing) = child_guard.take() {
+            let _ = existing.kill();
+            let _ = existing.wait();
         }
 
         let mut cmd = Command::new(Self::llama_server_binary());

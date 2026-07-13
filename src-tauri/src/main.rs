@@ -93,6 +93,11 @@ async fn main() {
         .route("/api/privacy/telemetry/preview", get(telemetry_preview))
         .route("/api/prefs/{key}", get(get_pref).put(set_pref))
         .fallback(static_handler)
+        // Defence in depth against CSRF to the loopback control API: CORS blocks reading
+        // responses and preflighted requests, but a malicious page can still fire "simple"
+        // cross-site POSTs (no custom headers). This middleware rejects any mutating request
+        // whose Origin isn't a Kayon origin or whose Sec-Fetch-Site marks it cross-site.
+        .layer(axum::middleware::from_fn(csrf_guard))
         // Tight CORS: the UI is served same-origin from this port, so only the Kayon origins are
         // allowed. This stops arbitrary websites the user visits from issuing preflighted
         // POST/DELETE calls to the unauthenticated local-control API (delete, download, adopt,
@@ -117,6 +122,40 @@ async fn main() {
     log::info!("Kayon server listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+const ALLOWED_ORIGINS: &[&str] = &[
+    "http://127.0.0.1:9518", "http://localhost:9518",
+    "http://127.0.0.1:3000", "http://localhost:3000",
+];
+
+/// Reject cross-site mutating requests to the loopback control API (CSRF defence). Safe methods
+/// (GET/HEAD/OPTIONS) pass. For mutating methods we reject when `Sec-Fetch-Site` is cross-site, or
+/// when an `Origin`/`Referer` is present that is not a Kayon origin. Non-browser clients (curl,
+/// the app's own IPC) send no Origin and are allowed.
+async fn csrf_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method();
+    let mutating = !matches!(method, &axum::http::Method::GET | &axum::http::Method::HEAD | &axum::http::Method::OPTIONS);
+    if mutating {
+        let headers = req.headers();
+        if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+            if site == "cross-site" || site == "same-site" {
+                return (StatusCode::FORBIDDEN, "cross-site request rejected").into_response();
+            }
+        }
+        let origin_ok = |val: Option<&str>| match val {
+            None => true, // non-browser client (no Origin) — allowed
+            Some(o) => ALLOWED_ORIGINS.iter().any(|a| o == *a),
+        };
+        let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+        if !origin_ok(origin) {
+            return (StatusCode::FORBIDDEN, "disallowed origin").into_response();
+        }
+    }
+    next.run(req).await
 }
 
 fn ok_json<T: serde::Serialize>(data: T) -> Json<ApiResponse<T>> {
