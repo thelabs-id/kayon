@@ -58,9 +58,7 @@ async fn main() {
                 }) {
                     let (db, dl, id) = (db.clone(), dl.clone(), d.id.clone());
                     tokio::spawn(async move {
-                        if let Err(e) = dl.resume_download(&db, &id, None).await {
-                            log::error!("resume of download {} failed: {}", id, e);
-                        }
+                        dl.drive(&db, &id).await;
                     });
                 }
             }
@@ -354,9 +352,7 @@ async fn start_download(
                 let db = s.db.clone();
                 let dl = s.dl.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = dl.resume_download(&db, &id, None).await {
-                        log::error!("download failed: {}", e);
-                    }
+                    dl.drive(&db, &id).await;
                 });
             }
             ok_json(state).into_response()

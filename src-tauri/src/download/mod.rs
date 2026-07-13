@@ -102,6 +102,20 @@ impl DownloadManager {
         Ok((state, true))
     }
 
+    /// Drive a download to completion, ensuring the row never gets stuck `Active` on an
+    /// unexpected error (network drop, disk error). On failure, flip a still-active row to failed
+    /// so a later Start re-spawns it, without clobbering a cancelled/quarantined status.
+    pub async fn drive(&self, db: &Arc<Database>, download_id: &str) {
+        if let Err(e) = self.resume_download(db, download_id, None).await {
+            if let Ok(Some(d)) = db.get_download(download_id) {
+                if matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued) {
+                    let _ = db.set_download_error(download_id, &e.to_string());
+                }
+            }
+            log::error!("download {} failed: {}", download_id, e);
+        }
+    }
+
     pub async fn resume_download(
         &self,
         db: &Arc<Database>,
@@ -181,6 +195,18 @@ impl DownloadManager {
                 file.write_all(&chunk)?;
                 let n = chunk.len() as u64;
                 total_received += n;
+
+                // Never write past the catalog-signed size: a compromised/misconfigured origin
+                // streaming more than `total_bytes` would blow the disk budget reserved by the
+                // pre-flight. Stop and fail rather than let it run away (the checksum would also
+                // reject it, but we don't want the extra bytes on disk in the first place).
+                if state.total_bytes > 0 && total_received > state.total_bytes {
+                    db.set_download_error(download_id, "origin sent more than the signed size")?;
+                    return Err(anyhow!(
+                        "origin sent more than the signed size ({} > {}) — aborted",
+                        total_received, state.total_bytes
+                    ));
+                }
 
                 if last_report.elapsed().as_millis() > 500 {
                     let elapsed = start.elapsed().as_secs_f64();

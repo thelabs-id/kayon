@@ -75,6 +75,12 @@ pub fn load_local_catalog() -> Option<Catalog> {
         return None;
     }
     let mut catalog: Catalog = serde_json::from_slice(&json_bytes).ok()?;
+    // Apply the same schema gate as fresh fetches (CAT-5): a cache written by a newer build must
+    // not be interpreted by an older one as if it were the supported schema.
+    if catalog.schema_version != SUPPORTED_SCHEMA_VERSION {
+        log::warn!("cached catalog schemaVersion unsupported — ignoring cache, using bundled");
+        return None;
+    }
     catalog.verified_signature = Some("verified".to_string());
     Some(catalog)
 }
