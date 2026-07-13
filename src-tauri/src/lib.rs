@@ -124,21 +124,45 @@ pub fn start_api_server() {
     // never be reachable from the LAN — every endpoint (delete, download, adopt, launch) is
     // local-user-only by design.
     let addr = SocketAddr::from(([127, 0, 0, 1], 9518));
-    log::info!("Kayon server listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            axum::serve(listener, app).await.unwrap();
+            // Non-fatal bind: if the port is already taken (e.g. a stray second launch that raced
+            // the single-instance guard), log and exit this thread quietly instead of panicking.
+            let listener = match tokio::net::TcpListener::bind(addr).await {
+                Ok(l) => l,
+                Err(e) => {
+                    log::warn!("Kayon API server could not bind {} ({}) — another instance is running", addr, e);
+                    return;
+                }
+            };
+            log::info!("Kayon server listening on http://{}", addr);
+            if let Err(e) = axum::serve(listener, app).await {
+                log::error!("Kayon API server stopped: {}", e);
+            }
         });
     });
 }
 
-/// Desktop entry point: launch the local API server, then run the Tauri window (WebView2) that
-/// loads the bundled UI. The UI calls the API on 127.0.0.1:9518 exactly as the browser build does.
+/// Desktop entry point: run the Tauri window (WebView2) that loads the bundled UI, backed by the
+/// local API server on 127.0.0.1:9518. A single-instance guard ensures a second launch focuses the
+/// existing window instead of starting a second server (which would fail to bind the port).
 pub fn run() {
+    use tauri::Manager;
     let _ = env_logger::try_init();
-    start_api_server();
-    // Give the API server a moment to bind before the webview starts fetching.
-    std::thread::sleep(std::time::Duration::from_millis(400));
     tauri::Builder::default()
+        // Must be the FIRST plugin: when a second copy is launched, this fires in the ALREADY-
+        // running instance and the second process exits. Focus/restore the existing window.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
+        .setup(|_app| {
+            // Only the primary instance reaches setup(), so only it starts the API server — no
+            // port contention. The UI polls at 1 Hz and shows data as soon as the server is up.
+            start_api_server();
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running Kayon");
 }
