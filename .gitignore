@@ -1,0 +1,21 @@
+# Rust
+/src-tauri/target/
+**/*.rs.bk
+
+# Node / Vite
+/src/node_modules/
+/src/dist/
+/src/.tmp/
+
+# Local runtime state
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

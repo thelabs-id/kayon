@@ -1,0 +1,36 @@
+[package]
+name = "kayon"
+version = "0.1.0"
+edition = "2021"
+description = "Honest, private, local LLM workstation for Windows + NVIDIA"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+nvml-wrapper = "0.10"
+sysinfo = "0.33"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+rand = "0.8"
+reqwest = { version = "0.12", features = ["stream", "blocking", "json"] }
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+thiserror = "2"
+base64 = "0.22"
+hex = "0.4"
+dirs = "6"
+notify = "7"
+tokio-stream = { version = "0.1", features = ["time"] }
+
+[profile.release]
+opt-level = 3
+lto = true
