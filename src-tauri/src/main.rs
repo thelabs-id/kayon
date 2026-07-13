@@ -46,6 +46,27 @@ async fn main() {
 
     let state = AppState { db, dl, rt };
 
+    // DL-1: resume any downloads that were mid-flight when the app last exited. Their partial
+    // files and rows are persisted, so we re-drive them (Range-resumed) on startup.
+    {
+        let db = state.db.clone();
+        let dl = state.dl.clone();
+        tokio::spawn(async move {
+            if let Ok(downloads) = db.list_downloads() {
+                for d in downloads.into_iter().filter(|d| {
+                    matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued)
+                }) {
+                    let (db, dl, id) = (db.clone(), dl.clone(), d.id.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = dl.resume_download(&db, &id, None).await {
+                            log::error!("resume of download {} failed: {}", id, e);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/api/hardware", get(hardware))
         .route("/api/hardware/stream", get(hardware_stream))
@@ -72,7 +93,21 @@ async fn main() {
         .route("/api/privacy/telemetry/preview", get(telemetry_preview))
         .route("/api/prefs/{key}", get(get_pref).put(set_pref))
         .fallback(static_handler)
-        .layer(tower_http::cors::CorsLayer::permissive())
+        // Tight CORS: the UI is served same-origin from this port, so only the Kayon origins are
+        // allowed. This stops arbitrary websites the user visits from issuing preflighted
+        // POST/DELETE calls to the unauthenticated local-control API (delete, download, adopt,
+        // launch). Same-origin requests from the served UI are unaffected.
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin([
+                    "http://127.0.0.1:9518".parse().unwrap(),
+                    "http://localhost:9518".parse().unwrap(),
+                    "http://127.0.0.1:3000".parse().unwrap(),
+                    "http://localhost:3000".parse().unwrap(),
+                ])
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .with_state(state);
 
     // Bind loopback only: this is a private, local-control API with no auth (PRIV-2). It must

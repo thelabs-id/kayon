@@ -37,35 +37,23 @@ pub fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn bundled_catalog_path() -> PathBuf {
-    crate_root().join("catalog").join("catalog.json")
-}
 
-fn bundled_sig_path() -> PathBuf {
-    crate_root().join("catalog").join("catalog.json.sig")
-}
+// The bundled catalog + detached signature are embedded in the binary at build time. Embedding
+// (rather than reading from disk) makes them tamper-evident — altering them requires modifying the
+// signed binary — and removes any dependency on the working directory. Re-sign (`catsign sign`)
+// before building whenever catalog.json changes so these stay consistent.
+const BUNDLED_CATALOG_JSON: &[u8] = include_bytes!("../../catalog/catalog.json");
+const BUNDLED_CATALOG_SIG: &[u8] = include_bytes!("../../catalog/catalog.json.sig");
 
+/// Load the bundled catalog, failing closed if its embedded signature does not verify against the
+/// baked-in key (CAT-5). The app never trusts an unsigned/tampered catalog's origins or checksums.
 pub fn load_bundled_catalog() -> Result<Catalog> {
-    let path = bundled_catalog_path();
-    if !path.exists() {
-        return Err(anyhow!("bundled catalog not found at {}", path.display()));
-    }
-    let data = std::fs::read_to_string(&path)?;
-    let mut catalog: Catalog = serde_json::from_str(&data)?;
-    catalog.verified_signature = None;
-
-    let sig_path = bundled_sig_path();
-    if sig_path.exists() {
-        let sig_bytes = std::fs::read(&sig_path)?;
-        let json_bytes = std::fs::read(&path)?;
-        let sig = Signature::from_slice(&sig_bytes).ok();
-        if let Some(sig) = sig {
-            if baked_key().verify(&json_bytes, &sig).is_ok() {
-                catalog.verified_signature = Some("verified".to_string());
-            }
-        }
-    }
-
+    let sig = Signature::from_slice(BUNDLED_CATALOG_SIG)
+        .map_err(|e| anyhow!("bundled catalog signature malformed: {}", e))?;
+    baked_key().verify(BUNDLED_CATALOG_JSON, &sig)
+        .map_err(|_| anyhow!("bundled catalog signature verification failed — refusing to load"))?;
+    let mut catalog: Catalog = serde_json::from_slice(BUNDLED_CATALOG_JSON)?;
+    catalog.verified_signature = Some("verified".to_string());
     Ok(catalog)
 }
 
@@ -154,19 +142,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_catalog_signature_verifies() {
-        let json = std::fs::read(bundled_catalog_path()).expect("catalog.json present");
-        let sig_bytes = std::fs::read(bundled_sig_path()).expect("catalog.json.sig present");
-        let sig = Signature::from_slice(&sig_bytes).expect("valid signature bytes");
-        // The baked-in verifying key must accept the bundled catalog (CAT-5).
-        assert!(baked_key().verify(&json, &sig).is_ok(), "genuine catalog must verify");
+    fn bundled_catalog_loads_and_is_verified() {
+        // The embedded catalog must verify against the baked key and load fail-closed (CAT-5).
+        let c = load_bundled_catalog().expect("bundled catalog must verify and load");
+        assert_eq!(c.verified_signature.as_deref(), Some("verified"));
+        assert!(!c.entries.is_empty());
     }
 
     #[test]
     fn tampered_catalog_is_rejected() {
-        let mut json = std::fs::read(bundled_catalog_path()).expect("catalog.json present");
-        let sig_bytes = std::fs::read(bundled_sig_path()).expect("catalog.json.sig present");
-        let sig = Signature::from_slice(&sig_bytes).expect("valid signature bytes");
+        let mut json = BUNDLED_CATALOG_JSON.to_vec();
+        let sig = Signature::from_slice(BUNDLED_CATALOG_SIG).expect("valid signature bytes");
         // Flip one byte: verification must fail — trust rides on the signature, not the host.
         json.push(b'!');
         assert!(baked_key().verify(&json, &sig).is_err(), "tampered catalog must be rejected");

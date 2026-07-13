@@ -22,13 +22,21 @@ fn compute_kv_bytes(
     embedding_length: u32,
     head_count: u32,
     key_length: Option<u32>,
+    value_length: Option<u32>,
     context_length: u32,
     kv_type_bytes: u8,
 ) -> u64 {
-    let head_dim = key_length.unwrap_or_else(|| embedding_length / head_count);
-    let d_kv = head_count_kv as u64 * head_dim as u64;
-    let kv_per_token = 2u64 * block_count as u64 * d_kv * kv_type_bytes as u64;
-    kv_per_token * context_length as u64
+    // Key and value head dims can differ (some models set attention.key_length independently of
+    // attention.value_length). Sum them rather than doubling one — otherwise KV is mis-estimated
+    // for those models. Fall back to embedding_length/head_count only when a field is absent (§7).
+    let default_dim = if head_count > 0 { embedding_length / head_count } else { 0 };
+    let key_dim = key_length.unwrap_or(default_dim) as u64;
+    // If only key_length is set, K and V head dims are symmetric — fall back to key_length before
+    // the generic divisor (e.g. Gemma sets key_length=256 and V matches).
+    let val_dim = value_length.or(key_length).unwrap_or(default_dim) as u64;
+    let per_token =
+        block_count as u64 * head_count_kv as u64 * (key_dim + val_dim) * kv_type_bytes as u64;
+    per_token * context_length as u64
 }
 
 pub fn evaluate_remote(
@@ -144,7 +152,7 @@ fn evaluate_inner(
 
     let kv = compute_kv_bytes(
         arch.block_count, arch.head_count_kv, arch.embedding_length,
-        arch.head_count, arch.key_length.or(arch.value_length),
+        arch.head_count, arch.key_length, arch.value_length,
         context_length, kv_type_bytes,
     );
 

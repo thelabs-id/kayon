@@ -141,14 +141,17 @@ pub fn adopt_model(
     // it enters the library. We never trust the caller-supplied digest or the filename alone —
     // that's what makes "record the digest as the checksum for free" honest.
     let expected = digest.trim().to_lowercase().replace("sha256:", "");
-    if expected.len() == 64 {
-        let computed = hash_file(blob)?;
-        if computed != expected {
-            return Err(anyhow!(
-                "blob hash mismatch: manifest digest {} but content hashes to {} — not adopting",
-                expected, computed
-            ));
-        }
+    // The digest MUST be a well-formed SHA-256; a malformed one can't gate anything, so adoption
+    // fails rather than silently linking an unverified blob (OLL-3 / §5 checksum gate).
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(anyhow!("invalid Ollama digest '{}' — expected a 64-char SHA-256", digest));
+    }
+    let computed = hash_file(blob)?;
+    if computed != expected {
+        return Err(anyhow!(
+            "blob hash mismatch: manifest digest {} but content hashes to {} — not adopting",
+            expected, computed
+        ));
     }
 
     let dest = PathBuf::from(library_path).join(format!("{}-{}.gguf", model_name, tag));
