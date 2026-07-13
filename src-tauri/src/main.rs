@@ -302,10 +302,16 @@ async fn ollama_adopt(
 ) -> impl IntoResponse {
     let lib_dir = library::library_dir();
     let _ = std::fs::create_dir_all(&lib_dir);
-    match ollama::adopt_model(
-        &req.blob_path, &lib_dir.to_string_lossy(),
-        &req.name, &req.tag, &req.digest, req.size_bytes,
-    ) {
+    // Adoption hashes the blob (OLL-3 gate) which is CPU/IO-bound for multi-GB models; run it on
+    // the blocking pool so it never stalls the async runtime handling other requests.
+    let (blob_path, lib_str, name, tag, digest, size) = (
+        req.blob_path.clone(), lib_dir.to_string_lossy().to_string(),
+        req.name.clone(), req.tag.clone(), req.digest.clone(), req.size_bytes,
+    );
+    let adopt_result = tokio::task::spawn_blocking(move || {
+        ollama::adopt_model(&blob_path, &lib_str, &name, &tag, &digest, size)
+    }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("adoption task panicked: {}", e)));
+    match adopt_result {
         Ok(path) => {
             let model = InstalledModel {
                 id: uuid::Uuid::new_v4().to_string(),

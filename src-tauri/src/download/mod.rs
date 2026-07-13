@@ -191,8 +191,12 @@ impl DownloadManager {
         }
 
         // Verify by hashing the whole file from disk — correct for both fresh and resumed
-        // downloads (a partial-stream hash would miss the pre-existing prefix). DL-3.
-        let computed = hash_file(&state.target_path)?;
+        // downloads (a partial-stream hash would miss the pre-existing prefix). DL-3. Runs on the
+        // blocking pool so hashing a multi-GB file doesn't stall the async runtime.
+        let hash_path = state.target_path.clone();
+        let computed = tokio::task::spawn_blocking(move || hash_file(&hash_path))
+            .await
+            .map_err(|e| anyhow!("hash task panicked: {}", e))??;
         if computed != state.sha256_expected {
             let quarantine = format!("{}.quarantine", state.target_path);
             let _ = std::fs::rename(&state.target_path, &quarantine);
