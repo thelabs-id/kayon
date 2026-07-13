@@ -40,9 +40,10 @@ export default function Library() {
   }
 
   const loadModel = async (m: InstalledModel) => {
-    const r = await api.runtimeStart({ modelPath:m.path, modelId:m.modelId, quantLabel:m.quantLabel, nGpuLayers:999, contextLength:2048, runtimeArgs:[] })
+    // Server computes n_gpu_layers from the local verdict and pulls runtimeArgs from the
+    // catalog (§7 single-sourcing), so we just name the installed model.
+    const r = await api.runtimeLoad(m.id, 4096, 2)
     if (!r.ok) alert('Failed: ' + r.error)
-    else window.location.hash = ''
   }
 
   return (

@@ -4,6 +4,10 @@ import VerdictBadge from '../components/VerdictBadge'
 
 function fmt(b: number): string { return b < 1024**3 ? `${(b/1024**2).toFixed(0)} MB` : `${(b/1024**3).toFixed(2)} GB` }
 
+// A checksum is "pinned" only when it's a real 64-hex-char SHA-256 (CAT-6). Placeholders are
+// not downloadable — the fit verdict still shows, but download waits on a generator run.
+function isPinned(sha: string): boolean { return /^[0-9a-f]{64}$/i.test(sha.trim()) }
+
 const order: Record<string, number> = { FITS_FULLY:0, FITS_TIGHT:1, GPU_CPU_SPLIT:2, CPU_ONLY:3, UNVERIFIED_ARCH:4, EXCEEDS_MACHINE:5 }
 
 export default function Browser() {
@@ -36,7 +40,8 @@ export default function Browser() {
 
   const download = async (entry: CatalogEntry, q: {label:string;bytes:number;sha256:string;source:string}) => {
     setDownloading(`${entry.id}-${q.label}`)
-    await api.startDownload({ modelId: entry.id, quantLabel: q.label, url: q.source, totalBytes: q.bytes, sha256: q.sha256 })
+    const r = await api.startDownload({ modelId: entry.id, quantLabel: q.label })
+    if (!r.ok) alert('Download refused: ' + (r.error || 'unknown'))
     setTimeout(() => { setDownloading(null); load() }, 1000)
   }
 
@@ -88,11 +93,15 @@ export default function Browser() {
                       <td className="mono">{v?.nGpuLayers ?? '-'}</td>
                       <td className="text-xs text-muted" style={{maxWidth:300}}>{v?.explainability}</td>
                       <td>
-                        {v?.verdict !== 'EXCEEDS_MACHINE' ? (
+                        {v?.verdict === 'EXCEEDS_MACHINE' ? (
+                          <span className="text-xs text-muted">Won't fit</span>
+                        ) : !isPinned(q.sha256) ? (
+                          <span className="text-xs text-muted" title="The catalog generator (CAT-6) has not pinned a real SHA-256 for this entry yet.">Checksum pending</span>
+                        ) : (
                           <button className="btn btn-primary btn-sm" disabled={downloading===`${entry.id}-${q.label}`} onClick={()=>download(entry,q)}>
                             {downloading===`${entry.id}-${q.label}` ? 'Starting...' : 'Download'}
                           </button>
-                        ) : <span className="text-xs text-muted">Won't fit</span>}
+                        )}
                       </td>
                     </tr>
                   )

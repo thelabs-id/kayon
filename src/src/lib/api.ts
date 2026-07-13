@@ -255,7 +255,8 @@ export const api = {
   },
   deleteModel: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/library/delete/${id}`, { method: 'POST' }),
   downloads: () => apiFetch<ApiResponse<DownloadState[]>>('/api/downloads'),
-  startDownload: (body: { modelId: string; quantLabel: string; url: string; totalBytes: number; sha256: string }) =>
+  // Downloads are resolved server-side from the verified catalog; the client only names the entry.
+  startDownload: (body: { modelId: string; quantLabel: string }) =>
     apiFetch<ApiResponse<DownloadState>>('/api/downloads/start', { method: 'POST', body: JSON.stringify(body) }),
   cancelDownload: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/downloads/${id}/cancel`, { method: 'DELETE' }),
   ollamaModels: () => apiFetch<ApiResponse<OllamaModel[]>>('/api/ollama/models'),
@@ -263,6 +264,15 @@ export const api = {
     apiFetch<ApiResponse<InstalledModel>>('/api/ollama/adopt', { method: 'POST', body: JSON.stringify(body) }),
   runtimeStart: (body: { modelPath: string; modelId: string; quantLabel: string; nGpuLayers: number; contextLength: number; runtimeArgs: string[] }) =>
     apiFetch<ApiResponse<RuntimeStatus>>('/api/runtime/start', { method: 'POST', body: JSON.stringify(body) }),
+  // One-press load (LIB-4): server computes n_gpu_layers from the local verdict and pulls
+  // runtimeArgs from the catalog, so the runtime matches the fit engine (§7).
+  runtimeLoad: (installedId: string, ctx?: number, kvTypeBytes?: number) => {
+    const p = new URLSearchParams()
+    if (ctx) p.set('ctx', String(ctx))
+    if (kvTypeBytes) p.set('kvTypeBytes', String(kvTypeBytes))
+    const qs = p.toString()
+    return apiFetch<ApiResponse<RuntimeStatus>>(`/api/runtime/load/${installedId}${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  },
   runtimeStop: () => apiFetch<ApiResponse<RuntimeStatus>>('/api/runtime/stop', { method: 'POST' }),
   runtimeStatus: () => apiFetch<ApiResponse<RuntimeStatus>>('/api/runtime/status'),
   benchmark: (body: { modelId: string; quantLabel: string; contextLength: number }) =>

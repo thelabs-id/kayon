@@ -37,7 +37,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
     const q = bestPick.entry.quants.find(x => x.label === bestPick.verdict.quantLabel) || bestPick.entry.quants[0]
     if (!q) return
     setInstalling(true)
-    const r = await api.startDownload({ modelId: bestPick.entry.id, quantLabel: q.label, url: q.source, totalBytes: q.bytes, sha256: q.sha256 })
+    const r = await api.startDownload({ modelId: bestPick.entry.id, quantLabel: q.label })
     setInstalling(false)
     if (r.ok) setInstalled(true)
     else alert('Could not start install: ' + (r.error || 'unknown'))

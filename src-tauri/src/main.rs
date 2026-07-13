@@ -62,6 +62,7 @@ async fn main() {
         .route("/api/ollama/models", get(ollama_models))
         .route("/api/ollama/adopt", post(ollama_adopt))
         .route("/api/runtime/start", post(runtime_start))
+        .route("/api/runtime/load/{id}", post(runtime_load))
         .route("/api/runtime/stop", post(runtime_stop))
         .route("/api/runtime/status", get(runtime_status))
         .route("/api/runtime/benchmark", post(benchmark))
@@ -74,7 +75,10 @@ async fn main() {
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 9518));
+    // Bind loopback only: this is a private, local-control API with no auth (PRIV-2). It must
+    // never be reachable from the LAN — every endpoint (delete, download, adopt, launch) is
+    // local-user-only by design.
+    let addr = SocketAddr::from(([127, 0, 0, 1], 9518));
     log::info!("Kayon server listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -244,10 +248,25 @@ async fn start_download(
     State(s): State<AppState>,
     Json(req): Json<DownloadStartReq>,
 ) -> impl IntoResponse {
+    // Trust rides on the signed catalog, not the caller (CAT-2, OD-2). Resolve the download
+    // origin, exact size, and pinned SHA-256 from the verified catalog by model_id + quant —
+    // never from client-supplied values. No arbitrary-URL downloads in v1.
+    let catalog = match catalog::get_active_catalog() {
+        Ok(c) => c,
+        Err(e) => return err_json(&e.to_string()).into_response(),
+    };
+    let quant = catalog.entries.iter()
+        .find(|e| e.id == req.model_id)
+        .and_then(|e| e.quants.iter().find(|q| q.label == req.quant_label));
+    let quant = match quant {
+        Some(q) => q,
+        None => return err_json("no such model/quant in the verified catalog").into_response(),
+    };
+
     let target = library::deterministic_path(&req.model_id, &req.quant_label);
     match s.dl.start_download(
         &s.db, &req.model_id, &req.quant_label,
-        &req.url, &target, req.total_bytes, &req.sha256,
+        &quant.source, &target, quant.bytes, &quant.sha256,
     ).await {
         Ok(state) => {
             let id = state.id.clone();
@@ -324,22 +343,62 @@ async fn runtime_start(
         req.n_gpu_layers, req.context_length, port, &req.runtime_args,
     ) {
         Ok(_) => {
-            let rt = s.rt.clone();
-            let port_cl = port;
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                let url = format!("http://127.0.0.1:{}/health", port_cl);
-                for _ in 0..10 {
-                    if let Ok(resp) = reqwest::get(&url).await {
-                        if resp.status().is_success() {
-                            rt.mark_running();
-                            return;
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+            spawn_health_wait(s.rt.clone(), port);
+            ok_json(s.rt.status()).into_response()
+        }
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+/// Poll llama-server `/health` until ready (RUN-1), marking the runtime running or errored.
+fn spawn_health_wait(rt: Arc<runtime::RuntimeManager>, port: u16) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let url = format!("http://127.0.0.1:{}/health", port);
+        for _ in 0..20 {
+            if let Ok(resp) = reqwest::get(&url).await {
+                if resp.status().is_success() {
+                    rt.mark_running();
+                    return;
                 }
-                rt.mark_error("health check timeout");
-            });
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        rt.mark_error("health check timeout");
+    });
+}
+
+/// Load an installed model with the settings the fit engine computed (§7: "fit must match the
+/// runtime it predicts"). n_gpu_layers comes from the local verdict; runtimeArgs come from the
+/// model's catalog entry (e.g. `--jinja`, RUN-1). This is the one-press LIB-4 path.
+async fn runtime_load(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<VerdictQuery>,
+) -> impl IntoResponse {
+    let model = match s.db.get_installed_model(&id) {
+        Ok(Some(m)) => m,
+        Ok(None) => return err_json("installed model not found").into_response(),
+        Err(e) => return err_json(&e.to_string()).into_response(),
+    };
+    let ctx = q.ctx.unwrap_or(4096);
+    let kv = q.kv_type_bytes.unwrap_or(2).clamp(1, 2);
+
+    // Computed offload from the exact local verdict (single-sourced with the runtime).
+    let verdict = fit::evaluate_local(&model.model_id, &model.quant_label, &model.path, ctx, kv);
+    let n_gpu_layers = verdict.as_ref().map(|v| v.n_gpu_layers).unwrap_or(999);
+
+    // runtimeArgs from the catalog entry, if this model came from the catalog (RUN-1).
+    let runtime_args = catalog::get_active_catalog().ok()
+        .and_then(|c| c.entries.iter()
+            .find(|e| e.id == model.model_id)
+            .and_then(|e| e.quants.iter().find(|qu| qu.label == model.quant_label).map(|qu| qu.runtime_args.clone())))
+        .unwrap_or_default();
+
+    let port = runtime::RuntimeManager::find_available_port();
+    match s.rt.start(&model.path, &model.model_id, &model.quant_label, n_gpu_layers, ctx, port, &runtime_args) {
+        Ok(_) => {
+            spawn_health_wait(s.rt.clone(), port);
             ok_json(s.rt.status()).into_response()
         }
         Err(e) => err_json(&e.to_string()).into_response(),
@@ -528,9 +587,8 @@ body{font-family:system-ui,sans-serif;background:#faf9f5;color:#1a1a1a;display:f
 struct DownloadStartReq {
     model_id: String,
     quant_label: String,
-    url: String,
-    total_bytes: u64,
-    sha256: String,
+    // url / totalBytes / sha256 are intentionally NOT accepted from the client: the server
+    // resolves them from the verified catalog so the trust model can't be bypassed (CAT-2).
 }
 
 #[derive(serde::Deserialize)]
