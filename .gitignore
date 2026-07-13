@@ -19,3 +19,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Catalog signing private key (never commit)
+/src-tauri/catalog/signing.key

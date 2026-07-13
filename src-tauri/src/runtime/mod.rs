@@ -32,6 +32,7 @@ impl RuntimeManager {
         self.status.lock().unwrap().clone()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
         model_path: &str,
@@ -40,6 +41,7 @@ impl RuntimeManager {
         n_gpu_layers: i32,
         context_length: u32,
         port: u16,
+        kv_type_bytes: u8,
         runtime_args: &[String],
     ) -> Result<()> {
         let mut child_guard = self.child.lock().unwrap();
@@ -56,6 +58,13 @@ impl RuntimeManager {
             .arg("--metrics")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // §7 single-sourcing: if the fit verdict assumed q8_0 KV (kv_type_bytes == 1), the runtime
+        // MUST launch with the matching cache type, or it would run a different memory config than
+        // the verdict predicted (OD-1). f16 (== 2) is the default and needs no flags.
+        if kv_type_bytes == 1 {
+            cmd.arg("--cache-type-k").arg("q8_0").arg("--cache-type-v").arg("q8_0");
+        }
 
         for arg in runtime_args {
             cmd.arg(arg);

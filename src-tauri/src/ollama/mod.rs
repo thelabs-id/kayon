@@ -129,23 +129,53 @@ pub fn adopt_model(
     library_path: &str,
     model_name: &str,
     tag: &str,
-    _digest: &str,
+    digest: &str,
     _size: u64,
 ) -> Result<String> {
     let blob = Path::new(blob_path);
     if !blob.exists() {
         return Err(anyhow!("blob not found: {}", blob_path));
     }
+
+    // OLL-3 checksum gate: the blob's content must actually hash to the manifest digest before
+    // it enters the library. We never trust the caller-supplied digest or the filename alone —
+    // that's what makes "record the digest as the checksum for free" honest.
+    let expected = digest.trim().to_lowercase().replace("sha256:", "");
+    if expected.len() == 64 {
+        let computed = hash_file(blob)?;
+        if computed != expected {
+            return Err(anyhow!(
+                "blob hash mismatch: manifest digest {} but content hashes to {} — not adopting",
+                expected, computed
+            ));
+        }
+    }
+
     let dest = PathBuf::from(library_path).join(format!("{}-{}.gguf", model_name, tag));
-    // OLL-3: adopt in place via hard link — zero bytes copied. On a cross-volume attempt
-    // this returns an OS error (links can't span volumes); the caller surfaces the
-    // copy/relocate choice (OLL-4) rather than silently copying.
+    // Adopt in place via hard link — zero bytes copied. On a cross-volume attempt this returns
+    // an OS error (links can't span volumes); the caller surfaces the copy/relocate choice
+    // (OLL-4) rather than silently copying.
     if dest.exists() {
         return Ok(dest.to_string_lossy().to_string());
     }
     std::fs::hard_link(blob, &dest)
         .map_err(|e| anyhow!("hard link failed (cross-volume? use copy/relocate): {}", e))?;
     Ok(dest.to_string_lossy().to_string())
+}
+
+fn hash_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::with_capacity(1 << 20, f);
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn read_arch_from_blob(path: &Path) -> Option<String> {

@@ -1,26 +1,51 @@
 //! catsign — sign the bundled catalog with the project's ed25519 signing key (CAT-5/CAT-6).
 //!
-//! The signing key is derived deterministically from a fixed development seed so the
-//! verifying key is stable and can be baked into the app binary (`catalog::BAKED_PUBKEY`).
-//! In a real release the seed would come from a secret store / HSM, not source — this
-//! keeps the *mechanism* honest and testable end to end while remaining reproducible.
+//! The private signing key is NOT stored in source. It is read from (in order):
+//!   1. `KAYON_CATALOG_SEED` — 64-hex-char (32-byte) seed in the environment (CI secret / HSM export)
+//!   2. a key file at `KAYON_CATALOG_SEED_FILE` (default: `catalog/signing.key`, gitignored)
+//! If neither exists, `sign`/`pubkey` generate a fresh random key, persist it to the key file, and
+//! print the new verifying key to bake into `catalog::BAKED_PUBKEY`. Rotating the key therefore
+//! means: run `catsign pubkey`, paste the new key, run `catsign sign`.
 //!
 //! Usage:
-//!   cargo run --bin catsign -- sign      # writes catalog/catalog.json.sig
-//!   cargo run --bin catsign -- pubkey    # prints the [u8;32] verifying key literal
+//!   cargo run --bin catsign -- pubkey    # print the [u8;32] verifying-key literal
+//!   cargo run --bin catsign -- sign      # write catalog/catalog.json.sig
 
 use ed25519_dalek::{Signer, SigningKey};
 use std::path::PathBuf;
-
-// Fixed development seed. NOT a production secret.
-const DEV_SEED: [u8; 32] = *b"kayon-catalog-dev-signing-seed01";
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+fn key_file() -> PathBuf {
+    std::env::var("KAYON_CATALOG_SEED_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| crate_root().join("catalog").join("signing.key"))
+}
+
+/// Load the signing key from env or the key file; generate + persist one if absent.
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes(&DEV_SEED)
+    if let Ok(hex_seed) = std::env::var("KAYON_CATALOG_SEED") {
+        let bytes = hex::decode(hex_seed.trim()).expect("KAYON_CATALOG_SEED must be hex");
+        let seed: [u8; 32] = bytes.as_slice().try_into().expect("seed must be 32 bytes");
+        return SigningKey::from_bytes(&seed);
+    }
+    let path = key_file();
+    if let Ok(bytes) = std::fs::read(&path) {
+        let seed: [u8; 32] = bytes.as_slice().try_into().expect("key file must be 32 bytes");
+        return SigningKey::from_bytes(&seed);
+    }
+    // No key anywhere yet: generate one and persist it to the (gitignored) key file.
+    use rand::RngCore;
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&path, seed).expect("persist signing key");
+    eprintln!("generated a new signing key at {}", path.display());
+    SigningKey::from_bytes(&seed)
 }
 
 fn main() {

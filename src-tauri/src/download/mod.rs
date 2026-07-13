@@ -11,6 +11,9 @@ use crate::ipc::*;
 
 pub struct DownloadManager {
     client: reqwest::Client,
+    // Ids of downloads the user has cancelled; the streaming loop polls this and aborts so a
+    // cancelled transfer never later completes and installs the model (DL).
+    cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl DownloadManager {
@@ -19,7 +22,11 @@ impl DownloadManager {
             .user_agent("Kayon/0.1.0")
             .build()
             .expect("failed to build reqwest client");
-        Self { client }
+        Self { client, cancelled: std::sync::Mutex::new(std::collections::HashSet::new()) }
+    }
+
+    fn is_cancelled(&self, id: &str) -> bool {
+        self.cancelled.lock().unwrap().contains(id)
     }
 
     pub async fn start_download(
@@ -112,17 +119,35 @@ impl DownloadManager {
                 return Err(anyhow!(msg));
             }
 
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&state.target_path)?;
+            // If we asked to resume (received > 0) but the server ignored Range and returned a
+            // full 200 body, appending would duplicate the prefix and fail the checksum. Restart
+            // cleanly from byte 0 instead (DL-1 correctness).
+            let restart_from_zero = state.received_bytes > 0 && http_status == 200;
+            let mut file = if restart_from_zero {
+                total_received = 0;
+                db.update_download_progress(download_id, 0, &DownloadStatus::Active, 0, None)?;
+                std::fs::OpenOptions::new()
+                    .create(true).write(true).truncate(true)
+                    .open(&state.target_path)?
+            } else {
+                std::fs::OpenOptions::new()
+                    .create(true).append(true)
+                    .open(&state.target_path)?
+            };
 
             let mut last_report = std::time::Instant::now();
             let start = std::time::Instant::now();
+            let session_start_bytes = total_received; // bytes already on disk this session
 
             let mut stream = resp.bytes_stream();
             use futures_util::StreamExt;
             while let Some(chunk) = stream.next().await {
+                // Cooperative cancellation: if the download row was cancelled, stop streaming
+                // so a cancelled transfer never later marks itself completed/installed (DL).
+                if self.is_cancelled(download_id) {
+                    db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+                    return Ok(());
+                }
                 let chunk = chunk?;
                 file.write_all(&chunk)?;
                 let n = chunk.len() as u64;
@@ -131,7 +156,7 @@ impl DownloadManager {
                 if last_report.elapsed().as_millis() > 500 {
                     let elapsed = start.elapsed().as_secs_f64();
                     let throughput = if elapsed > 0.0 {
-                        ((total_received - state.received_bytes) as f64 / elapsed) as u64
+                        (total_received.saturating_sub(session_start_bytes) as f64 / elapsed) as u64
                     } else {
                         0
                     };
@@ -157,6 +182,12 @@ impl DownloadManager {
                 }
             }
             file.flush()?;
+        }
+
+        // If cancelled during the transfer or verification window, do not install (DL).
+        if self.is_cancelled(download_id) {
+            db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+            return Ok(());
         }
 
         // Verify by hashing the whole file from disk — correct for both fresh and resumed
@@ -190,6 +221,8 @@ impl DownloadManager {
     }
 
     pub async fn cancel_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
+        // Signal the in-flight streaming task to stop, then mark the row cancelled.
+        self.cancelled.lock().unwrap().insert(download_id.to_string());
         db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
         Ok(())
     }

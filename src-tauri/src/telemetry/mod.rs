@@ -16,10 +16,6 @@ impl TelemetryManager {
         Self { enabled }
     }
 
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
     pub fn toggle(&mut self, db: &Database, enabled: bool) -> Result<(), String> {
         self.enabled = enabled;
         db.set_preference("telemetry_enabled", if enabled { "true" } else { "false" })

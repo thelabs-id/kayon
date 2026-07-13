@@ -17,7 +17,6 @@
 //!       SmolLM2-135M-Instruct-Q4_K_M.gguf,SmolLM2-135M-Instruct-Q8_0.gguf
 
 use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::PathBuf;
 
 #[path = "../gguf/mod.rs"]
@@ -31,22 +30,6 @@ fn quant_label_from_filename(file: &str) -> String {
     // e.g. Model-Q4_K_M.gguf -> Q4_K_M
     let stem = file.strip_suffix(".gguf").unwrap_or(file);
     stem.rsplit('-').next().unwrap_or(stem).to_string()
-}
-
-fn hash_and_size(path: &PathBuf) -> (String, u64) {
-    let mut f = std::fs::File::open(path).expect("open temp");
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1024 * 1024];
-    let mut total = 0u64;
-    loop {
-        let n = f.read(&mut buf).expect("read temp");
-        if n == 0 {
-            break;
-        }
-        total += n as u64;
-        hasher.update(&buf[..n]);
-    }
-    (format!("{:x}", hasher.finalize()), total)
 }
 
 fn meta_u32(h: &gguf::GgufHeader, arch: &str, key: &str) -> Option<u32> {
@@ -79,16 +62,29 @@ async fn main() {
         let url = hf_resolve_url(repo, file);
         eprintln!("fetching {url}");
         let tmp = tmp_dir.join(file);
-        {
+        // Stream to disk while hashing incrementally — GGUF quants can be several GB, so never
+        // buffer the whole file in memory (would OOM/thrash in CI).
+        let (sha256, size) = {
+            use futures_util::StreamExt;
+            use std::io::Write;
             let resp = client.get(&url).send().await.expect("http get");
             if !resp.status().is_success() {
                 eprintln!("  HTTP {} for {file}", resp.status());
                 std::process::exit(1);
             }
-            let bytes = resp.bytes().await.expect("body");
-            std::fs::write(&tmp, &bytes).expect("write temp");
-        }
-        let (sha256, size) = hash_and_size(&tmp);
+            let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp).expect("create temp"));
+            let mut hasher = Sha256::new();
+            let mut size: u64 = 0;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.expect("stream chunk");
+                out.write_all(&chunk).expect("write chunk");
+                hasher.update(&chunk);
+                size += chunk.len() as u64;
+            }
+            out.flush().expect("flush");
+            (format!("{:x}", hasher.finalize()), size)
+        };
         eprintln!("  sha256={sha256} bytes={size}");
 
         if arch_json.is_none() {

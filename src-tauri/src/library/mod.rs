@@ -41,21 +41,3 @@ pub fn delete_model(db: &Database, id: &str, confirm: bool) -> Result<bool> {
     Ok(true)
 }
 
-pub fn scan_library_dir(db: &Database) -> Result<Vec<InstalledModel>> {
-    let dir = library_dir();
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut found = vec![];
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map(|e| e == "gguf").unwrap_or(false) {
-            let path_str = path.to_string_lossy().to_string();
-            if let Ok(Some(existing)) = db.find_installed_by_path(&path_str) {
-                found.push(existing);
-            }
-        }
-    }
-    Ok(found)
-}

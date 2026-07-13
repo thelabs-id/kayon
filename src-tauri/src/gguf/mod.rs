@@ -262,6 +262,7 @@ pub fn supported_standard_attention_archs() -> &'static [&'static str] {
     &["llama", "mistral", "gemma", "gemma2", "qwen2", "phi3", "phi", "starcoder2", "command-r", "deepseek2"]
 }
 
+#[allow(dead_code)] // reusable GGUF utility (used by tooling / future local-quant display)
 pub fn file_type_quant_label(h: &GgufHeader) -> String {
     h.metadata.get("general.file_type")
         .and_then(|v| v.as_u32())

@@ -119,17 +119,12 @@ async fn get_catalog(State(_s): State<AppState>) -> impl IntoResponse {
 async fn refresh_catalog(State(s): State<AppState>) -> impl IntoResponse {
     match catalog::get_active_catalog() {
         Ok(local) => {
-            // A GET actually fired (fetch_remote_catalog requests catalog.json + .sig);
-            // log it regardless of whether the revision was newer (PRIV-5).
-            telemetry::log_network_request_full(
-                &s.db, "GET",
-                "https://raw.githubusercontent.com/thelabs-id/kayon/main/catalog/catalog.json",
-                "catalog", 0, 0, None, None,
-            );
-            match catalog::fetch_remote_catalog().await {
-                Ok(remote) => {
+            // fetch_remote_catalog logs both GETs at egress and verifies the signature (PRIV-5,
+            // CAT-5). We cache the exact verified bytes only when the revision is strictly newer.
+            match catalog::fetch_remote_catalog(&s.db).await {
+                Ok((remote, json_bytes, sig_bytes)) => {
                     if catalog::maybe_update_catalog(&local, &remote) {
-                        let _ = catalog::save_local_catalog(&remote);
+                        let _ = catalog::save_local_catalog_raw(&json_bytes, &sig_bytes);
                         ok_json(remote).into_response()
                     } else {
                         ok_json(local).into_response()
@@ -340,7 +335,8 @@ async fn runtime_start(
     let port = runtime::RuntimeManager::find_available_port();
     match s.rt.start(
         &req.model_path, &req.model_id, &req.quant_label,
-        req.n_gpu_layers, req.context_length, port, &req.runtime_args,
+        req.n_gpu_layers, req.context_length, port,
+        req.kv_type_bytes.unwrap_or(2), &req.runtime_args,
     ) {
         Ok(_) => {
             spawn_health_wait(s.rt.clone(), port);
@@ -396,7 +392,7 @@ async fn runtime_load(
         .unwrap_or_default();
 
     let port = runtime::RuntimeManager::find_available_port();
-    match s.rt.start(&model.path, &model.model_id, &model.quant_label, n_gpu_layers, ctx, port, &runtime_args) {
+    match s.rt.start(&model.path, &model.model_id, &model.quant_label, n_gpu_layers, ctx, port, kv, &runtime_args) {
         Ok(_) => {
             spawn_health_wait(s.rt.clone(), port);
             ok_json(s.rt.status()).into_response()
@@ -611,6 +607,8 @@ struct RuntimeStartReq {
     quant_label: String,
     n_gpu_layers: i32,
     context_length: u32,
+    #[serde(default)]
+    kv_type_bytes: Option<u8>,
     #[serde(default)]
     runtime_args: Vec<String>,
 }
