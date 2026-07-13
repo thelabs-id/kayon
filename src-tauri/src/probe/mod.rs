@@ -40,7 +40,9 @@ pub fn probe_machine() -> Result<MachineProfile> {
 fn probe_gpus() -> Vec<GpuInfo> {
     let nvml = match Nvml::init() {
         Ok(n) => n,
-        Err(_) => return vec![],
+        // §2 / HW-2: NVML is primary, nvidia-smi is the fallback. Only when BOTH fail do we
+        // report no supported GPU (HW-6).
+        Err(_) => return nvidia_smi_probe(),
     };
 
     let count = match nvml.device_count() {
@@ -106,6 +108,51 @@ fn probe_gpus() -> Vec<GpuInfo> {
             cuda_version: cuda,
             total_vram_bytes: total_vram,
             telemetry,
+        });
+    }
+    gpus
+}
+
+/// Fallback GPU probe via `nvidia-smi` when NVML can't initialize but the driver tools work (§2).
+/// Parses one row per GPU; fields absent from a given driver are left at their defaults.
+fn nvidia_smi_probe() -> Vec<GpuInfo> {
+    let query = "name,memory.total,memory.free,memory.used,utilization.gpu,temperature.gpu,\
+                 power.draw,clocks.gr,clocks.mem,driver_version,compute_cap";
+    let output = std::process::Command::new("nvidia-smi")
+        .args([&format!("--query-gpu={}", query), "--format=csv,noheader,nounits"])
+        .output();
+    let out = match output {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return vec![],
+    };
+    let text = String::from_utf8_lossy(&out);
+    let mut gpus = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let f: Vec<String> = line.split(',').map(|s| s.trim().to_string()).collect();
+        let get = |i: usize| f.get(i).cloned().unwrap_or_default();
+        let mib = |i: usize| get(i).parse::<u64>().unwrap_or(0) * 1024 * 1024;
+        let fnum = |i: usize| get(i).parse::<f32>().unwrap_or(0.0);
+        let mhz = |i: usize| get(i).parse::<u32>().unwrap_or(0);
+        let cc = get(10);
+        gpus.push(GpuInfo {
+            name: get(0),
+            pci_id: None,
+            architecture: cc.split_once('.').and_then(|(maj, min)| {
+                compute_arch(maj.parse().ok()?, min.parse().ok()?)
+            }),
+            compute_capability: if cc.is_empty() { None } else { Some(cc) },
+            driver_version: Some(get(9)).filter(|s| !s.is_empty()),
+            cuda_version: None,
+            total_vram_bytes: mib(1),
+            telemetry: GpuTelemetry {
+                vram_free_bytes: mib(2),
+                vram_used_bytes: mib(3),
+                utilization_percent: fnum(4),
+                temperature_c: fnum(5),
+                power_watts: fnum(6),
+                core_clock_mhz: mhz(7),
+                mem_clock_mhz: mhz(8),
+            },
         });
     }
     gpus

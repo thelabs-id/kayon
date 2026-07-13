@@ -73,7 +73,28 @@ impl RuntimeManager {
             cmd.arg("--cache-type-k").arg("q8_0").arg("--cache-type-v").arg("q8_0");
         }
 
+        // runtimeArgs are per-model launch flags (e.g. --jinja), but they must NOT override the
+        // configuration the fit engine single-sourced (-ngl/-c/cache-type) or the loopback binding
+        // (--host/--port) or the model path (-m). Drop any reserved flag (and its value) so a
+        // catalog/client arg can't silently change the memory config or expose the API (§7, PRIV).
+        const RESERVED: &[&str] = &[
+            "-ngl", "--n-gpu-layers", "-c", "--ctx-size", "--cache-type-k", "--cache-type-v",
+            "--host", "--port", "-m", "--model",
+        ];
+        let mut skip_value = false;
         for arg in runtime_args {
+            if skip_value {
+                skip_value = false;
+                continue;
+            }
+            let flag = arg.split('=').next().unwrap_or(arg);
+            if RESERVED.contains(&flag) {
+                if !arg.contains('=') {
+                    skip_value = true; // "-flag value" form — also drop the following value
+                }
+                log::warn!("ignoring reserved runtimeArg that would override fit/binding: {}", arg);
+                continue;
+            }
             cmd.arg(arg);
         }
 

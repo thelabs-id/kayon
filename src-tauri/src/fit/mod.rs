@@ -132,19 +132,34 @@ fn evaluate_inner(
     let is_standard = !explicit_nonstandard && arch_supported;
 
     if !is_standard {
+        // We can't model KV for this architecture, but we still avoid a fabricated all-layers
+        // offload that would OOM a small GPU (RUN-1). Conservatively offload only as many whole
+        // layers as the weights alone fit in VRAM (KV excluded because it's unknown); if we can't
+        // estimate a per-layer size, fall back to CPU-only (0) rather than -ngl 999.
+        let vram_avail = vram_free.saturating_sub(display_headroom(vram_total));
+        let per_block = per_block_override.unwrap_or(
+            if arch.block_count > 0 { w_total / arch.block_count as u64 } else { 0 },
+        );
+        let budget = vram_avail.saturating_sub(COMPUTE_BUFFER + CUDA_OVERHEAD);
+        let conservative_ngl = if per_block > 0 {
+            ((budget / per_block) as i32).min(arch.block_count as i32).max(0)
+        } else {
+            0
+        };
         return FitVerdict {
             model_id: model_id.to_string(),
             quant_label: quant_label.to_string(),
             context_length,
             kv_type_bytes,
             verdict: VerdictKind::UnverifiedArch,
-            n_gpu_layers: 999,
-            per_block_bytes: None,
+            n_gpu_layers: conservative_ngl,
+            per_block_bytes: if per_block > 0 { Some(per_block) } else { None },
             breakdown: None,
             explainability: format!(
                 "Architecture '{}' with attention type '{}' is not in the supported-standard set. \
-                 KV cache cannot be modeled. The model may still load with auto-offload.",
-                arch.architecture, att_type
+                 KV cache cannot be modeled, so the fit is unverified. Launching with a conservative \
+                 {} GPU layers (weights-only estimate) to avoid an out-of-memory all-layers offload.",
+                arch.architecture, att_type, conservative_ngl
             ),
             computed_at: Utc::now(),
         };
