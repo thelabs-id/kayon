@@ -1,122 +1,77 @@
 import { useEffect, useState } from 'react'
-import { api, type MachineProfile, type FitVerdict, type CatalogEntry } from '../lib/api'
-import VerdictBadge from '../components/VerdictBadge'
+import { api, type CatalogEntry, type FitVerdict, type MachineProfile } from '../lib/api'
+import { KMark, Check } from '../components/icons'
 
-function fmt(b: number): string { return b < 1024**3 ? `${(b/1024**2).toFixed(0)} MB` : `${(b/1024**3).toFixed(2)} GB` }
+const g = (b: number) => (b / 1024 ** 3).toFixed(1)
+const fmt = (b: number) => b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(0)} MB` : `${(b / 1024 ** 3).toFixed(1)} GB`
+const isPinned = (s: string) => /^[0-9a-f]{64}$/i.test((s || '').trim())
+const tier: Record<string, number> = { FITS_FULLY: 4, FITS_TIGHT: 3, GPU_CPU_SPLIT: 2, CPU_ONLY: 1 }
 
-export default function Onboarding({ onDone }: { onDone: () => void }) {
-  const [step, setStep] = useState(0)
-  const [machine, setMachine] = useState<MachineProfile|null>(null)
-  const [bestPick, setBestPick] = useState<{entry: CatalogEntry; verdict: FitVerdict}|null>(null)
+export default function Onboarding({ machine, onFinish, goBrowser }: { machine: MachineProfile | null; onFinish: () => void; goBrowser: () => void }) {
+  const [best, setBest] = useState<{ entry: CatalogEntry; verdict: FitVerdict; q: any } | null>(null)
   const [installing, setInstalling] = useState(false)
   const [installed, setInstalled] = useState(false)
 
   useEffect(() => {
-    api.hardware().then(r => { if (r.ok && r.data) setMachine(r.data) })
-    Promise.all([api.catalog(), api.verdicts()]).then(([c,v]) => {
+    Promise.all([api.catalog(), api.verdicts(4096, 2)]).then(([c, v]) => {
       if (!c.ok || !c.data || !v.ok || !v.data) return
-      const vm = new Map<string, FitVerdict>()
-      for (const x of v.data) vm.set(`${x.modelId}|${x.quantLabel}`, x)
-      // Computed best pick (FR-2/CAT-3): rank by verdict quality, then by model capability
-      // (larger weight = more capable), then prefer the heavier quant. Never "first that fits".
-      // Include CPU_ONLY so the no-GPU degraded path still offers a hardware-computed best pick.
-      const tier: Record<string, number> = { FITS_FULLY: 4, FITS_TIGHT: 3, GPU_CPU_SPLIT: 2, CPU_ONLY: 1 }
-      let best: {entry: CatalogEntry; verdict: FitVerdict}|null = null
-      let bestScore = -1
-      const isPinned = (sha: string) => /^[0-9a-f]{64}$/i.test((sha || '').trim())
-      for (const entry of c.data.entries) {
-        for (const q of entry.quants) {
-          const vd = vm.get(`${entry.id}|${q.label}`)
-          if (!vd || !(vd.verdict in tier)) continue
-          // Only recommend a quant the user can actually install: its checksum must be pinned,
-          // otherwise the one-click install would be refused by the backend.
-          if (!isPinned(q.sha256)) continue
-          // weight the fit tier heavily, then the model's byte size (capability proxy)
-          const score = tier[vd.verdict] * 1e15 + q.bytes
-          if (score > bestScore) { bestScore = score; best = { entry, verdict: vd } }
-        }
+      const vm = new Map<string, FitVerdict>(); for (const x of v.data) vm.set(`${x.modelId}|${x.quantLabel}`, x)
+      let winner: any = null, bestScore = -1
+      for (const entry of c.data.entries) for (const q of entry.quants) {
+        const vd = vm.get(`${entry.id}|${q.label}`)
+        if (!vd || !(vd.verdict in tier) || !isPinned(q.sha256)) continue
+        const s = tier[vd.verdict] * 1e15 + q.bytes
+        if (s > bestScore) { bestScore = s; winner = { entry, verdict: vd, q } }
       }
-      setBestPick(best)
+      setBest(winner)
     })
   }, [])
 
   const gpu = machine?.gpus?.[0]
 
-  // FR-2/FR-3: the computed best pick is offered as an explicit one-click confirm.
-  // Nothing downloads until the user clicks — no auto-download.
-  const installBestPick = async () => {
-    if (!bestPick) return
-    const q = bestPick.entry.quants.find(x => x.label === bestPick.verdict.quantLabel) || bestPick.entry.quants[0]
-    if (!q) return
+  const install = async () => {
+    if (!best) return
     setInstalling(true)
-    const r = await api.startDownload({ modelId: bestPick.entry.id, quantLabel: q.label })
+    const r = await api.startDownload({ modelId: best.entry.id, quantLabel: best.q.label })
     setInstalling(false)
-    if (r.ok) setInstalled(true)
-    else alert('Could not start install: ' + (r.error || 'unknown'))
+    if (r.ok) { setInstalled(true); setTimeout(() => goBrowser(), 700) }
+    else alert('Could not start: ' + (r.error || 'unknown'))
   }
 
   return (
-    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',padding:24}}>
-      <div style={{maxWidth:600,width:'100%'}}>
-        <div style={{textAlign:'center',marginBottom:32}}>
-          <h1 style={{fontSize:28,fontWeight:600}}>Welcome to Kayon</h1>
-          <div className="text-muted" style={{marginTop:4}}>Honest, private, local LLM workstation</div>
+    <div className="onb">
+      <div className="onbinner">
+        <div className="fx ac gap12" style={{ marginBottom: 26 }}>
+          <KMark size={34} />
+          <span className="kword" style={{ fontSize: 26 }}>Kayon<span className="kdot">.</span></span>
         </div>
-        <div className="card animate-in" key={step}>
-          {step === 0 && <div>
-            <div className="card-title" style={{marginBottom:8}}>What Kayon is</div>
-            <p className="text-muted" style={{lineHeight:1.7}}>Kayon detects your GPU, tells you which models actually fit via a real memory model, manages downloads, adopts Ollama models without re-downloading, and runs everything locally with no cloud dependency.</p>
-            <div style={{marginTop:12,padding:10,background:'var(--bg)',borderRadius:6,fontSize:13}}>
-              <strong>You can skip any step.</strong> Dashboard, browser, library, and Ollama adoption all work with zero models.
-            </div>
-          </div>}
-          {step === 1 && <div>
-            <div className="card-title" style={{marginBottom:8}}>Hardware detected</div>
-            {gpu ? <div style={{padding:12,background:'var(--bg)',borderRadius:6}}>
-              <div className="font-medium">{gpu.name}</div>
-              <div className="text-sm text-muted" style={{lineHeight:1.8,marginTop:4}}>
-                Architecture: {gpu.architecture||'unknown'} | Compute: {gpu.computeCapability||'?'}<br/>
-                Driver: {gpu.driverVersion||'?'} | CUDA: {gpu.cudaVersion||'?'}<br/>
-                VRAM: {fmt(gpu.totalVramBytes)}
-              </div>
-              {machine && <div className="text-xs text-muted" style={{marginTop:8}}>{machine.cpu.brand} | {machine.cpu.threadCount} threads | {fmt(machine.ram.totalBytes)} RAM</div>}
-            </div> : <div className="text-muted">No GPU detected. Verdicts will be RAM-based.</div>}
-          </div>}
-          {step === 2 && <div>
-            <div className="card-title" style={{marginBottom:8}}>Your best fit</div>
-            {bestPick ? <div>
-              <p className="text-muted" style={{lineHeight:1.7,marginBottom:12}}>Based on your hardware, this model fits best:</p>
-              <div style={{padding:12,background:'var(--bg)',borderRadius:6}}>
-                <div className="font-medium">{bestPick.entry.id}</div>
-                <div className="text-sm text-muted">{bestPick.entry.family} | {bestPick.entry.params} | {bestPick.verdict.quantLabel}</div>
-                <div style={{marginTop:8}}><VerdictBadge verdict={bestPick.verdict.verdict}/></div>
-                <div className="text-xs text-muted" style={{marginTop:8,lineHeight:1.5}}>{bestPick.verdict.explainability}</div>
-              </div>
-              <div style={{marginTop:12,padding:10,background:'rgba(224,145,107,0.08)',borderRadius:6,fontSize:13}}>
-                Nothing downloads until you confirm. This is an explicit one-click install — no auto-download.
-              </div>
-              <div style={{marginTop:12}}>
-                {installed ? (
-                  <div className="badge badge-success">Install started — track it in Library</div>
-                ) : (
-                  <button className="btn btn-primary btn-sm" disabled={installing} onClick={installBestPick}>
-                    {installing ? 'Starting…' : `Install ${bestPick.entry.id} (${bestPick.verdict.quantLabel})`}
-                  </button>
-                )}
-              </div>
-            </div> : <p className="text-muted">No catalog model currently fits. You can explore the browser or adopt Ollama models.</p>}
-          </div>}
-          <div style={{display:'flex',justifyContent:'space-between',marginTop:24,alignItems:'center'}}>
-            <div style={{display:'flex',gap:6}}>
-              {[0,1,2].map(i=><span key={i} style={{width:8,height:8,borderRadius:'50%',background:i===step?'var(--accent)':'var(--border)'}}/>)}
-            </div>
-            <div style={{display:'flex',gap:8}}>
-              {step>0 && <button className="btn btn-ghost btn-sm" onClick={()=>setStep(step-1)}>Back</button>}
-              <button className="btn btn-secondary btn-sm" onClick={onDone}>Skip</button>
-              {step<2 ? <button className="btn btn-primary btn-sm" onClick={()=>setStep(step+1)}>Next</button> : <button className="btn btn-primary btn-sm" onClick={onDone}>Open Kayon</button>}
-            </div>
+        <div className="stepdots"><span className="stepdot on" /><span className="stepdot on" /><span className="stepdot" /></div>
+        <h1 className="ptitle" style={{ fontSize: 44 }}>Your machine, measured.</h1>
+        <p className="psub" style={{ fontSize: 16, marginBottom: 6 }}>Kayon probed your hardware directly. Here's the honest picture — and the one model that fits it best.</p>
+        <div className="probe">
+          <div className="prober"><Check />{gpu ? `${gpu.name} — ${gpu.architecture ?? ''}, ${g(gpu.totalVramBytes)} GB VRAM` : 'No supported NVIDIA GPU — verdicts fall back to RAM'}</div>
+          <div className="prober"><Check />{machine ? `${machine.cpu.brand} · ${machine.cpu.threadCount} threads · ${g(machine.ram.totalBytes)} GB RAM` : 'Probing CPU…'}</div>
+          <div className="prober"><Check />{gpu ? `Driver ${gpu.driverVersion ?? '?'} · CUDA ${gpu.cudaVersion ?? '?'} · llama-server ready` : 'Runtime ready'}</div>
+        </div>
+        <div className="bestpick">
+          <div className="fx ac jb" style={{ marginBottom: 10 }}>
+            <span className="tag" style={{ color: 'var(--iris)', borderColor: 'color-mix(in oklab, var(--iris) 45%, var(--line2))' }}><span className="dotc" />Computed best pick — not a hardcoded default</span>
           </div>
+          {best ? (
+            <div className="fx ac jb" style={{ gap: 16, flexWrap: 'wrap' }}>
+              <div>
+                <div className="serif" style={{ fontSize: 28 }}>{best.entry.id} · {best.q.label}</div>
+                <div className="mono muted" style={{ fontSize: 12.5, marginTop: 4 }}>{fmt(best.q.bytes)} · {best.verdict.verdict.replace(/_/g, ' ')} · {best.verdict.nGpuLayers} GPU layers</div>
+              </div>
+              <span className="verdict" style={{ color: 'var(--v-full)', background: 'color-mix(in oklab, var(--v-full) 16%, transparent)' }}><span className="vsw" style={{ background: 'var(--v-full)' }} />{best.verdict.verdict.replace(/_/g, ' ')}</span>
+            </div>
+          ) : <div className="mono muted" style={{ fontSize: 13 }}>No downloadable catalog model fits yet — you can still explore with zero models.</div>}
         </div>
+        <div className="fx gap12" style={{ flexWrap: 'wrap' }}>
+          {best && <button className="btn btn-iris" disabled={installing || installed} onClick={install}>{installed ? 'Install started ✓' : installing ? 'Starting…' : `Install this model · ${fmt(best.q.bytes)}`}</button>}
+          <button className="btn btn-line" onClick={onFinish}>Skip — explore with zero models</button>
+        </div>
+        <p className="mono faint" style={{ fontSize: 11, marginTop: 18, lineHeight: 1.6 }}>Nothing downloads until you confirm. The dashboard, browser, and Ollama adoption all work with no models installed.</p>
       </div>
     </div>
   )

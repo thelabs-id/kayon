@@ -1,127 +1,149 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type CatalogEntry, type FitVerdict } from '../lib/api'
-import VerdictBadge from '../components/VerdictBadge'
+import { api, type CatalogEntry, type FitVerdict, type MachineProfile, type Quant } from '../lib/api'
+import { VerdictChip } from '../components/icons'
 
-function fmt(b: number): string { return b < 1024**3 ? `${(b/1024**2).toFixed(0)} MB` : `${(b/1024**3).toFixed(2)} GB` }
+const CTX = [2048, 4096, 8192, 16384, 32768]
+const fmtB = (b: number) => b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(0)} MB` : `${(b / 1024 ** 3).toFixed(1)} GB`
+const g = (b: number) => (b / 1024 ** 3).toFixed(1)
+const order: Record<string, number> = { FITS_FULLY: 0, FITS_TIGHT: 1, GPU_CPU_SPLIT: 2, CPU_ONLY: 3, UNVERIFIED_ARCH: 4, EXCEEDS_MACHINE: 5 }
+const isPinned = (s: string) => /^[0-9a-f]{64}$/i.test((s || '').trim())
 
-// A checksum is "pinned" only when it's a real 64-hex-char SHA-256 (CAT-6). Placeholders are
-// not downloadable — the fit verdict still shows, but download waits on a generator run.
-function isPinned(sha: string): boolean { return /^[0-9a-f]{64}$/i.test(sha.trim()) }
+function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy }: {
+  q: Quant; v?: FitVerdict; ctxLabel: string; vramAvail: string
+  open: boolean; onToggle: () => void; onDownload: () => void; busy: boolean
+}) {
+  const bd = v?.breakdown
+  const pinned = isPinned(q.sha256)
+  return (
+    <>
+      <div className="qrow" onClick={onToggle}>
+        <span className="qname">{q.label}</span>
+        <span className="qsize">{fmtB(q.bytes)}</span>
+        {v ? <VerdictChip v={v.verdict} /> : <span />}
+        <span className="mono faint" style={{ fontSize: 12, textAlign: 'right' }}>
+          {v && v.verdict !== 'EXCEEDS_MACHINE' && v.verdict !== 'UNVERIFIED_ARCH' && `${v.nGpuLayers} layers · `}
+          {open ? '▾' : '▸'}
+        </span>
+      </div>
+      {open && (
+        <div className="breakdown">
+          {bd ? <>
+            <div className="bkbar">
+              <span className="bkseg" style={{ width: `${(bd.weightsBytes / bd.totalNeedBytes) * 100}%`, background: 'var(--iris)' }} />
+              <span className="bkseg" style={{ width: `${(bd.kvBytes / bd.totalNeedBytes) * 100}%`, background: 'var(--amber)' }} />
+              <span className="bkseg" style={{ width: `${((bd.computeBufferBytes + bd.cudaOverheadBytes) / bd.totalNeedBytes) * 100}%`, background: 'var(--v-cpu)' }} />
+            </div>
+            weights {g(bd.weightsBytes)} + KV@{ctxLabel} {g(bd.kvBytes)} + buffers {g(bd.computeBufferBytes + bd.cudaOverheadBytes)} = <b style={{ color: 'var(--ink)' }}>{g(bd.totalNeedBytes)} GB</b> vs {vramAvail} GB available
+          </> : (v?.explainability ?? '')}
+          <div style={{ marginTop: 10 }}>
+            {v?.verdict === 'EXCEEDS_MACHINE'
+              ? <span className="faint">Won't fit on this machine.</span>
+              : !pinned
+                ? <span className="faint" title="Checksum not yet pinned by the catalog generator (CAT-6).">Checksum pending — not yet downloadable.</span>
+                : <button className="btn btn-iris btn-sm" disabled={busy} onClick={(e) => { e.stopPropagation(); onDownload() }}>{busy ? 'Starting…' : `Download · ${fmtB(q.bytes)}`}</button>}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
 
-const order: Record<string, number> = { FITS_FULLY:0, FITS_TIGHT:1, GPU_CPU_SPLIT:2, CPU_ONLY:3, UNVERIFIED_ARCH:4, EXCEEDS_MACHINE:5 }
+function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey }: {
+  entry: CatalogEntry; vmap: Map<string, FitVerdict>; ctxLabel: string; vramAvail: string; lead?: boolean
+  openQ: string | null; setOpenQ: (k: string | null) => void; download: (e: CatalogEntry, q: Quant) => void; busyKey: string | null
+}) {
+  const caps = [entry.capabilities.tools && 'tools', entry.capabilities.reasoning && 'reasoning', entry.capabilities.vision && 'vision'].filter(Boolean) as string[]
+  const bestV = entry.quants.map(q => vmap.get(`${entry.id}|${q.label}`)).filter(Boolean).sort((a, b) => (order[a!.verdict] ?? 9) - (order[b!.verdict] ?? 9))[0]
+  const pinnedQ = entry.quants.find(q => isPinned(q.sha256))
+  return (
+    <div className={`mcard ${lead ? 'lead' : ''}`}>
+      {lead && <div className="leadbanner"><svg className="kmk" viewBox="0 0 64 64" width="15" height="15"><path className="ko" d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z" style={{ stroke: 'var(--iris)' }} /></svg><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best pick for your machine</span><span className="muted">— the most capable model that fits, computed from real free VRAM.</span></div>}
+      <div className="mhead">
+        <div>
+          <div className="mname">{entry.id}</div>
+          <div className="mmeta">
+            <span className="tag mono">{entry.params}</span>
+            <span className="tag mono">{entry.family}</span>
+            {caps.map(c => <span key={c} className="tag">{c}</span>)}
+          </div>
+        </div>
+        {lead && pinnedQ
+          ? <button className="btn btn-iris" onClick={() => download(entry, pinnedQ)}>Install · {fmtB(pinnedQ.bytes)}</button>
+          : bestV && <span className="mono faint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>best: {bestV.verdict.replace(/_/g, ' ').toLowerCase()}</span>}
+      </div>
+      <div className="qtable">
+        {entry.quants.map(q => {
+          const key = `${entry.id}|${q.label}`
+          return <QuantRow key={key} q={q} v={vmap.get(key)} ctxLabel={ctxLabel} vramAvail={vramAvail} open={openQ === key} onToggle={() => setOpenQ(openQ === key ? null : key)} onDownload={() => download(entry, q)} busy={busyKey === key} />
+        })}
+      </div>
+    </div>
+  )
+}
 
-export default function Browser() {
+export default function Browser({ machine, goLibrary }: { machine: MachineProfile | null; goLibrary: () => void }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
   const [verdicts, setVerdicts] = useState<FitVerdict[]>([])
   const [ctx, setCtx] = useState(4096)
-  const [kvQuant, setKvQuant] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [downloading, setDownloading] = useState<string|null>(null)
+  const [kv, setKv] = useState(false)
+  const [openQ, setOpenQ] = useState<string | null>(null)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
 
   const load = async () => {
-    const [c,v] = await Promise.all([api.catalog(), api.verdicts(ctx, kvQuant ? 1 : 2)])
+    const [c, v] = await Promise.all([api.catalog(), api.verdicts(ctx, kv ? 1 : 2)])
     if (c.ok && c.data) setCatalog(c.data.entries)
     if (v.ok && v.data) setVerdicts(v.data)
-    setLoading(false)
   }
-  useEffect(() => { load() }, [ctx, kvQuant])
+  useEffect(() => { load() }, [ctx, kv])
 
-  const vMap = useMemo(() => {
-    const m = new Map<string, FitVerdict>()
-    for (const v of verdicts) m.set(`${v.modelId}|${v.quantLabel}`, v)
-    return m
-  }, [verdicts])
+  const vmap = useMemo(() => { const m = new Map<string, FitVerdict>(); for (const v of verdicts) m.set(`${v.modelId}|${v.quantLabel}`, v); return m }, [verdicts])
 
-  // Rank each model by a combined fit-tier + capability score over ALL its quants, so the computed
-  // best pick leads the page and ties (e.g. several FITS_FULLY models) break by capability, not
-  // catalog order (CAT-3). Higher score = better.
-  const bestScore = (e: CatalogEntry) => {
-    let best = -1
-    for (const q of e.quants) {
-      const v = vMap.get(`${e.id}|${q.label}`)
-      if (!v) continue
-      const tier = 99 - (order[v.verdict] ?? 99) // higher tier = better verdict
-      const s = tier * 1e15 + q.bytes             // then heavier (more capable) quant wins ties
-      if (s > best) best = s
-    }
-    return best
-  }
-  const sorted = useMemo(() => [...catalog].sort((a,b) => bestScore(b) - bestScore(a)),
-    [catalog, vMap])
+  const score = (e: CatalogEntry) => Math.max(-1, ...e.quants.map(q => { const v = vmap.get(`${e.id}|${q.label}`); if (!v) return -1; return (99 - (order[v.verdict] ?? 99)) * 1e15 + q.bytes }))
+  const sorted = useMemo(() => [...catalog].sort((a, b) => score(b) - score(a)), [catalog, vmap])
+  const lead = sorted[0]
+  const rest = sorted.slice(1)
 
-  const download = async (entry: CatalogEntry, q: {label:string;bytes:number;sha256:string;source:string}) => {
-    setDownloading(`${entry.id}-${q.label}`)
+  const gpu = machine?.gpus?.[0]
+  const vramAvail = gpu ? g(Math.max(0, gpu.telemetry.vramFreeBytes - Math.max(1024 ** 3, gpu.totalVramBytes * 0.1))) : '0'
+  const ctxLabel = ctx >= 1024 ? `${(ctx / 1024).toFixed(0)}k` : `${ctx}`
+
+  const download = async (entry: CatalogEntry, q: Quant) => {
+    const key = `${entry.id}|${q.label}`
+    setBusyKey(key)
     const r = await api.startDownload({ modelId: entry.id, quantLabel: q.label })
+    setBusyKey(null)
     if (!r.ok) alert('Download refused: ' + (r.error || 'unknown'))
-    setTimeout(() => { setDownloading(null); load() }, 1000)
+    else goLibrary()
   }
-
-  if (loading) return <div className="card"><div className="empty-state"><div className="empty-state-title">Loading catalog...</div></div></div>
 
   return (
-    <div>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
-        <h1 className="page-title" style={{margin:0}}>Model Browser</h1>
-        <div style={{display:'flex',gap:12,alignItems:'center'}}>
-          <span className="text-sm text-muted">Context:</span>
-          <select className="input" style={{width:120,padding:'6px 10px'}} value={ctx} onChange={e=>setCtx(+e.target.value)}>
-            {[2048,4096,8192,16384,32768].map(v=><option key={v} value={v}>{v.toLocaleString()}</option>)}
-          </select>
-          <label className="text-sm text-muted" style={{display:'flex',gap:6,alignItems:'center',cursor:'pointer'}} title="q8_0 KV cache ≈ halves KV memory; often flips a Tight/Split verdict (OD-1)">
-            <input type="checkbox" checked={kvQuant} onChange={e=>setKvQuant(e.target.checked)}/>
-            q8_0 KV
-          </label>
+    <div className="cinner">
+      <div className="pagehead">
+        <div>
+          <p className="eyebrow">Catalog · signed &amp; verified</p>
+          <h1 className="ptitle">What actually fits</h1>
+          <p className="psub">Every quant carries an honest verdict for <span className="iris">this</span> GPU — weights + KV cache + compute buffers vs. real free VRAM. Not <span className="mono">file_size &lt; VRAM</span>.</p>
         </div>
       </div>
-      <div style={{padding:'10px 16px',background:'var(--bg-card)',borderRadius:'var(--radius-md)',fontSize:13,color:'var(--text-muted)',marginBottom:16}}>
-        Best fit for your machine leads. Verdicts come from the fit engine (weights + KV + buffers + headroom), never naive file-size comparison.
+
+      <div className="ctrlbar">
+        <div className="ctrl">
+          <span className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>CONTEXT</span>
+          <div className="seg">{CTX.map(c => <button key={c} className={`segb ${ctx === c ? 'on' : ''}`} onClick={() => setCtx(c)}>{c >= 1024 ? `${c / 1024}k` : c}</button>)}</div>
+        </div>
+        <div className="ctrl">
+          <span className="mono" style={{ fontSize: 12, color: 'var(--muted)' }}>q8_0 KV CACHE</span>
+          <div className={`tgl ${kv ? 'on' : ''}`} onClick={() => setKv(v => !v)} />
+          <span className="mono faint" style={{ fontSize: 11 }}>{kv ? 'halves KV' : 'f16 default'}</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <span className="mono faint" style={{ fontSize: 11 }}>VRAM_avail {vramAvail} GB · headroom 1.0 GB</span>
       </div>
-      {sorted.map(entry => {
-        const isBest = entry.quants.some(q => vMap.get(`${entry.id}|${q.label}`)?.verdict === 'FITS_FULLY')
-        return (
-          <div key={entry.id} className="model-card" style={{marginBottom:16}}>
-            <div className="model-card-header">
-              <div>
-                <div className="model-card-name">{entry.id}</div>
-                <div className="model-card-family">{entry.family} | {entry.params} | {entry.license}</div>
-              </div>
-              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                {isBest && <span className="badge badge-accent">Best Fit</span>}
-                {entry.capabilities.tools && <span className="badge badge-info">tools</span>}
-                {entry.capabilities.reasoning && <span className="badge badge-info">reasoning</span>}
-              </div>
-            </div>
-            <table className="table" style={{marginTop:12}}>
-              <thead><tr><th>Quant</th><th>Size</th><th>Verdict</th><th>n_gpu_layers</th><th>Explanation</th><th/></tr></thead>
-              <tbody>
-                {entry.quants.map(q => {
-                  const v = vMap.get(`${entry.id}|${q.label}`)
-                  return (
-                    <tr key={q.label}>
-                      <td><span className="quant-chip">{q.label}</span></td>
-                      <td className="mono">{fmt(q.bytes)}</td>
-                      <td>{v && <VerdictBadge verdict={v.verdict} explainability={v.explainability} nGpuLayers={v.nGpuLayers}/>}</td>
-                      <td className="mono">{v?.nGpuLayers ?? '-'}</td>
-                      <td className="text-xs text-muted" style={{maxWidth:300}}>{v?.explainability}</td>
-                      <td>
-                        {v?.verdict === 'EXCEEDS_MACHINE' ? (
-                          <span className="text-xs text-muted">Won't fit</span>
-                        ) : !isPinned(q.sha256) ? (
-                          <span className="text-xs text-muted" title="The catalog generator (CAT-6) has not pinned a real SHA-256 for this entry yet.">Checksum pending</span>
-                        ) : (
-                          <button className="btn btn-primary btn-sm" disabled={downloading===`${entry.id}-${q.label}`} onClick={()=>download(entry,q)}>
-                            {downloading===`${entry.id}-${q.label}` ? 'Starting...' : 'Download'}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )
-      })}
+
+      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} />}
+      <div style={{ marginTop: 22 }}>
+        {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} />)}
+      </div>
     </div>
   )
 }

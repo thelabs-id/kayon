@@ -1,139 +1,128 @@
-import { useEffect, useState } from 'react'
-import { api, type MachineProfile } from '../lib/api'
+import { useState } from 'react'
+import { api, type MachineProfile, type RuntimeStatus, type BenchmarkResult } from '../lib/api'
 
-function fmt(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024**2) return `${(bytes/1024).toFixed(1)} KB`
-  if (bytes < 1024**3) return `${(bytes/1024**2).toFixed(1)} MB`
-  return `${(bytes/1024**3).toFixed(2)} GB`
-}
+const gb = (b: number) => (b / 1024 ** 3).toFixed(1)
+const tb = (b: number) => b / 1024 ** 4
 
-function Meter({ label, used, total }: { label: string; used: number; total: number }) {
-  const pct = total > 0 ? (used / total * 100) : 0
-  const color = pct > 80 ? 'var(--danger)' : pct > 50 ? 'var(--warning)' : 'var(--gpu-green)'
+function DiskRow({ mount, kind, free, total, color }: { mount: string; kind: string; free: number; total: number; color: string }) {
+  const usedPct = total > 0 ? ((total - free) / total) * 100 : 0
+  const unit = total >= 1024 ** 4 ? `${tb(free).toFixed(1)} / ${tb(total).toFixed(1)} TB free` : `${gb(free)} / ${gb(total)} GB free`
   return (
-    <div className="meter">
-      <div className="meter-header">
-        <span className="meter-label">{label}</span>
-        <span className="meter-value mono">{fmt(used)} / {fmt(total)}</span>
-      </div>
-      <div className="meter-bar">
-        <div className="meter-fill" style={{ width: `${pct}%`, background: color }} />
-      </div>
-    </div>
+    <>
+      <div className="specr" style={{ borderTop: 0, paddingTop: 0 }}><span className="speck">{mount} · {kind}</span><span className="specv">{unit}</span></div>
+      <div className="bar" style={{ marginTop: 0, marginBottom: 12 }}><div className="barfill" style={{ width: `${usedPct}%`, background: color }} /></div>
+    </>
   )
 }
 
-export default function Dashboard() {
-  const [machine, setMachine] = useState<MachineProfile | null>(null)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    const load = () => api.hardware().then(r => {
-      if (r.ok && r.data) setMachine(r.data)
-      else setErr(r.error || 'No GPU')
-    }).catch(e => setErr(e.message))
-    load()
-    const iv = setInterval(load, 1000) // HW-2/HW-4: 1 Hz telemetry
-    return () => clearInterval(iv)
-  }, [])
-
+export default function Dashboard({ machine, runtime, onReonboard }: { machine: MachineProfile | null; runtime: RuntimeStatus | null; onReonboard: () => void }) {
+  const [bench, setBench] = useState<BenchmarkResult | null>(null)
+  const [benching, setBenching] = useState(false)
   const gpu = machine?.gpus?.[0]
+  const t = gpu?.telemetry
+
+  const totalV = gpu?.totalVramBytes ?? 0
+  const usedV = t?.vramUsedBytes ?? 0
+  const freeV = t?.vramFreeBytes ?? 0
+  const circ = 2 * Math.PI * 66
+  const usedFrac = totalV > 0 ? usedV / totalV : 0
+  const rsvGB = Math.max(1, (totalV / 1024 ** 3) * 0.1)
+  const rsvFrac = totalV > 0 ? (rsvGB * 1024 ** 3) / totalV : 0
+  const usedLen = circ * usedFrac
+  const rsvLen = circ * rsvFrac
+
+  const cpuUtil = machine ? Math.round(machine.cpu.usagePercent) : 0
+  const ramUsed = machine ? gb(machine.ram.usedBytes) : '0'
+  const ramTotal = machine ? gb(machine.ram.totalBytes) : '0'
+  const ramPct = machine && machine.ram.totalBytes > 0 ? (machine.ram.usedBytes / machine.ram.totalBytes) * 100 : 0
+  const diskColors = ['var(--v-cpu)', 'var(--iris)', 'var(--amber)', 'var(--v-full)']
+
+  const runBench = async () => {
+    if (!runtime || runtime.kind !== 'running') { alert('Load a model first (Library → Load & Chat).'); return }
+    setBenching(true)
+    const r = await api.benchmark({ modelId: runtime.modelId ?? '', quantLabel: runtime.quantLabel ?? '', contextLength: 4096 })
+    setBenching(false)
+    if (r.ok && r.data) setBench(r.data)
+  }
 
   return (
-    <div>
-      <h1 className="page-title">Dashboard</h1>
-      {err && !machine ? (
-        <div className="card"><div className="empty-state">
-          <div className="empty-state-icon">!</div>
-          <div className="empty-state-title">No supported GPU</div>
-          <div className="empty-state-text">{err}. Verdicts fall back to RAM-only.</div>
-        </div></div>
-      ) : !machine ? (
-        <div className="card"><div className="empty-state">
-          <div className="empty-state-title">Probing hardware...</div>
-        </div></div>
-      ) : (
-        <>
-          {gpu ? (
-            <div className="card">
-              <div className="card-header">
-                <div>
-                  <div className="card-title">{gpu.name}</div>
-                  <div className="text-sm text-muted" style={{marginTop:4}}>
-                    {gpu.architecture || 'Unknown'} | Compute {gpu.computeCapability || '?'} | Driver {gpu.driverVersion || '?'} | CUDA {gpu.cudaVersion || '?'}
-                  </div>
-                </div>
-              </div>
-              <div style={{display:'grid', gridTemplateColumns:'160px 1fr', gap:24, alignItems:'center'}}>
-                <div style={{textAlign:'center'}}>
-                  <svg width="140" height="140" viewBox="0 0 140 140">
-                    <circle cx="70" cy="70" r="55" fill="none" stroke="var(--border)" strokeWidth="10"/>
-                    <circle cx="70" cy="70" r="55" fill="none" stroke="var(--accent)" strokeWidth="10"
-                      strokeDasharray={2*Math.PI*55}
-                      strokeDashoffset={2*Math.PI*55*(1 - gpu.telemetry.vramUsedBytes/gpu.totalVramBytes)}
-                      transform="rotate(-90 70 70)" strokeLinecap="round"
-                      style={{transition:'stroke-dashoffset 0.5s'}}/>
-                    <text x="70" y="68" textAnchor="middle" fontSize="24" fontWeight="600" fill="var(--text)" fontFamily="var(--font-mono)">
-                      {((gpu.telemetry.vramUsedBytes/gpu.totalVramBytes)*100).toFixed(0)}%
-                    </text>
-                    <text x="70" y="86" textAnchor="middle" fontSize="10" fill="var(--text-muted)">VRAM</text>
-                  </svg>
-                </div>
-                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
-                  <div><span className="text-sm text-muted">Utilization</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{gpu.telemetry.utilizationPercent.toFixed(1)}%</div></div>
-                  <div><span className="text-sm text-muted">Temperature</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{gpu.telemetry.temperatureC.toFixed(0)}C</div></div>
-                  <div><span className="text-sm text-muted">Power</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{gpu.telemetry.powerWatts.toFixed(1)} W</div></div>
-                  <div><span className="text-sm text-muted">Core Clock</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{gpu.telemetry.coreClockMhz} MHz</div></div>
-                  <div><span className="text-sm text-muted">Mem Clock</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{gpu.telemetry.memClockMhz} MHz</div></div>
-                  <div><span className="text-sm text-muted">VRAM Free</span><div className="mono" style={{fontSize:18,fontWeight:600}}>{fmt(gpu.telemetry.vramFreeBytes)}</div></div>
-                </div>
+    <div className="cinner">
+      <div className="pagehead">
+        <div>
+          <p className="eyebrow">Hardware · live at 1&nbsp;Hz</p>
+          <h1 className="ptitle">Instrument cluster</h1>
+          <p className="psub">Everything your machine is, and everything it can run — measured directly from NVML, not guessed.</p>
+        </div>
+        <button className="btn btn-line btn-sm" onClick={onReonboard}><span className="mono" style={{ fontSize: 12 }}>↻</span> Re-run first-run</button>
+      </div>
+
+      <div className="grid-dash" style={{ marginBottom: 20 }}>
+        <div className="panel gpucard">
+          {gpu ? <>
+            <div className="fx ac jb">
+              <span className="tag"><span className="dotc" />NVIDIA · detected</span>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--faint)' }}>{gpu.pciId ? `PCI ${gpu.pciId.split(':').slice(1).join(':').replace('.0', '.0')}` : ''}</span>
+            </div>
+            <div className="gpuname">{gpu.name.replace(/NVIDIA /i, '')}</div>
+            <div className="speclist">
+              <div className="specr"><span className="speck">Architecture</span><span className="specv">{gpu.architecture ?? '—'} · CC {gpu.computeCapability ?? '?'}</span></div>
+              <div className="specr"><span className="speck">Driver / CUDA</span><span className="specv">{gpu.driverVersion ?? '?'} · {gpu.cudaVersion ?? '?'}</span></div>
+              <div className="specr"><span className="speck">Total VRAM</span><span className="specv">{gb(totalV)} GB</span></div>
+              <div className="specr"><span className="speck">Temperature</span><span className="specv">{t?.temperatureC.toFixed(0) ?? '—'} °C</span></div>
+              <div className="specr"><span className="speck">Power draw</span><span className="specv">{t?.powerWatts.toFixed(0) ?? '—'} W</span></div>
+              <div className="specr"><span className="speck">Core / Mem clock</span><span className="specv">{t?.coreClockMhz ?? '—'} · {t?.memClockMhz ?? '—'} MHz</span></div>
+            </div>
+          </> : <div style={{ padding: '20px 0' }}><div className="gpuname">No supported GPU</div><p className="psub" style={{ marginTop: 10 }}>NVML found no NVIDIA GPU (or compute capability &lt; 5.0). Verdicts fall back to system RAM.</p></div>}
+        </div>
+
+        <div className="panel">
+          <div className="fx ac jb" style={{ marginBottom: 6 }}><span className="mkey">VRAM · dedicated</span><span className="mono" style={{ fontSize: 11, color: 'var(--faint)' }}>NVML memory_info</span></div>
+          <div className="ringwrap">
+            <div className="posrel" style={{ width: 160, height: 160, flex: 'none' }}>
+              <svg className="ring" width="160" height="160" viewBox="0 0 160 160">
+                <circle className="ringtrack" cx="80" cy="80" r="66" strokeWidth="14" />
+                <circle className="ringrsv" cx="80" cy="80" r="66" strokeWidth="14" strokeDasharray={`${rsvLen} ${circ}`} strokeDashoffset={-usedLen} />
+                <circle className="ringused" cx="80" cy="80" r="66" strokeWidth="14" strokeDasharray={`${usedLen} ${circ}`} />
+              </svg>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--faint)' }}>USED</div>
+                <div style={{ fontFamily: "'Instrument Serif',Georgia,serif", fontSize: 38, lineHeight: 1 }}>{gb(usedV)}</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>of {gb(totalV)} GB</div>
               </div>
             </div>
-          ) : (
-            <div className="card"><div className="empty-state">
-              <div className="empty-state-title">No GPU detected</div>
-              <div className="empty-state-text">Verdicts will be RAM-based.</div>
-            </div></div>
-          )}
-          <div className="grid grid-3">
-            <div className="card">
-              <div className="card-title">CPU</div>
-              <div className="text-sm text-muted" style={{margin:'8px 0'}}>{machine.cpu.brand}</div>
-              <div className="meter">
-                <div className="meter-header">
-                  <span className="meter-label">Utilization</span>
-                  <span className="meter-value mono">{machine.cpu.usagePercent.toFixed(0)}%</span>
-                </div>
-                <div className="meter-bar">
-                  <div className="meter-fill" style={{
-                    width: `${Math.min(100, machine.cpu.usagePercent)}%`,
-                    background: machine.cpu.usagePercent > 80 ? 'var(--danger)' : machine.cpu.usagePercent > 50 ? 'var(--warning)' : 'var(--gpu-green)'
-                  }}/>
-                </div>
-              </div>
-              <div className="text-xs text-muted" style={{marginTop:8}}>{machine.cpu.threadCount} threads | {machine.cpu.frequencyMhz} MHz</div>
-            </div>
-            <div className="card">
-              <div className="card-title">Memory</div>
-              <div style={{marginTop:12}}><Meter label="RAM" used={machine.ram.usedBytes} total={machine.ram.totalBytes}/></div>
-            </div>
-            <div className="card">
-              <div className="card-title">OS</div>
-              <div className="text-sm" style={{marginTop:8}}>{machine.os.name} {machine.os.version}</div>
-              <div className="text-xs text-muted" style={{marginTop:4}}>Host: {machine.os.hostName}</div>
+            <div className="legend">
+              <div className="legrow"><span className="legsw" style={{ background: 'var(--iris)' }} /><div><div style={{ fontWeight: 600 }}>{gb(usedV)} GB used</div><div className="mono faint" style={{ fontSize: 11 }}>model weights + KV</div></div></div>
+              <div className="legrow"><span className="legsw" style={{ background: 'var(--amber)' }} /><div><div style={{ fontWeight: 600 }}>{rsvGB.toFixed(1)} GB reserved</div><div className="mono faint" style={{ fontSize: 11 }}>display headroom</div></div></div>
+              <div className="legrow"><span className="legsw" style={{ background: 'var(--line2)' }} /><div><div style={{ fontWeight: 600 }}>{gb(freeV)} GB free</div><div className="mono faint" style={{ fontSize: 11 }}>available to allocate</div></div></div>
             </div>
           </div>
-          <div className="card">
-            <div className="card-title" style={{marginBottom:12}}>Storage</div>
-            {machine.disks.map((d,i) => (
-              <div key={i} style={{marginBottom:12}}>
-                <Meter label={`${d.mount} (${d.kind})`} used={d.totalBytes - d.freeBytes} total={d.totalBytes}/>
-              </div>
+        </div>
+      </div>
+
+      <div className="g3" style={{ marginBottom: 20 }}>
+        <div className="metric"><div className="mtop"><span className="mkey">GPU util</span><span className="mono faint" style={{ fontSize: 11 }}>core</span></div><div><span className="mbig">{t?.utilizationPercent.toFixed(0) ?? 0}</span><span className="munit">%</span></div><div className="bar"><div className="barfill" style={{ width: `${t?.utilizationPercent ?? 0}%`, background: 'var(--iris)' }} /></div></div>
+        <div className="metric"><div className="mtop"><span className="mkey">CPU</span><span className="mono faint" style={{ fontSize: 11 }}>{machine ? `${machine.cpu.coreCount}c · ${machine.cpu.threadCount}T` : ''}</span></div><div><span className="mbig">{cpuUtil}</span><span className="munit">%</span></div><div className="bar"><div className="barfill" style={{ width: `${cpuUtil}%`, background: 'var(--v-cpu)' }} /></div></div>
+        <div className="metric"><div className="mtop"><span className="mkey">System RAM</span><span className="mono faint" style={{ fontSize: 11 }}>of {ramTotal} GB</span></div><div><span className="mbig">{ramUsed}</span><span className="munit">GB</span></div><div className="bar"><div className="barfill" style={{ width: `${ramPct}%`, background: 'var(--amber)' }} /></div></div>
+      </div>
+
+      <div className="g2">
+        <div className="panel">
+          <div className="fx ac jb" style={{ marginBottom: 16 }}><span className="mkey">Speed benchmark · warm run</span>{runtime?.kind === 'running' && <span className="tag"><span className="dotc" style={{ background: 'var(--ok)' }} />{runtime.quantLabel}</span>}</div>
+          <div className="fx ac gap24" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div><div className="mono faint" style={{ fontSize: 11 }}>GENERATION</div><div><span className="mbig iris">{bench ? bench.genTokPerS.toFixed(0) : '—'}</span><span className="munit">tok/s</span></div></div>
+            <div><div className="mono faint" style={{ fontSize: 11 }}>PROMPT EVAL</div><div><span className="mbig">{bench ? bench.promptEvalTokPerS.toFixed(0) : '—'}</span><span className="munit">tok/s</span></div></div>
+            <div style={{ flex: 1, minWidth: 140 }}><div className="mono faint" style={{ fontSize: 11, marginBottom: 6 }}>@ 4096 ctx · fixed prompt</div><button className="btn btn-line btn-sm" disabled={benching} onClick={runBench}>{benching ? 'Running…' : '↻ Re-run benchmark'}</button></div>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="fx ac jb" style={{ marginBottom: 14 }}><span className="mkey">Per-drive disk</span></div>
+          <div className="speclist">
+            {(machine?.disks ?? []).slice(0, 3).map((d, i) => (
+              <DiskRow key={d.mount} mount={d.mount} kind={i === 0 ? 'system' : 'storage'} free={d.freeBytes} total={d.totalBytes} color={diskColors[i % diskColors.length]} />
             ))}
           </div>
-        </>
-      )}
+        </div>
+      </div>
     </div>
   )
 }
