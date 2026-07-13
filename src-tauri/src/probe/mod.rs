@@ -119,14 +119,17 @@ fn probe_cpu(sys: &System) -> CpuInfo {
         .first()
         .map(|c| c.brand().to_string())
         .unwrap_or_else(|| "Unknown CPU".into());
-    let total = cpus.len();
+    let logical = cpus.len();
+    // Physical cores vs logical threads differ on hyper-threaded CPUs (HW-3). Fall back to the
+    // logical count only if the physical count is unavailable.
+    let physical = sys.physical_core_count().unwrap_or(logical);
     let freq = cpus.first().map(|c| c.frequency()).unwrap_or(0);
     let usage = sys.global_cpu_usage();
 
     CpuInfo {
         brand,
-        core_count: total,
-        thread_count: total,
+        core_count: physical,
+        thread_count: logical,
         frequency_mhz: freq,
         usage_percent: usage,
     }

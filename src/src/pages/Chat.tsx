@@ -36,12 +36,21 @@ export default function Chat() {
       })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = ''
+      // Carry-over buffer: an SSE `data:` line can be split across TCP chunks, so only parse
+      // complete lines and keep the trailing partial for the next read (don't drop tokens).
+      let buffer = ''
       while (reader) {
-        const { done, value } = await reader.read(); if (done) break
-        for (const line of dec.decode(value, {stream:true}).split('\n')) {
-          if (!line.startsWith('data: ')) continue; const d = line.slice(6).trim(); if (d === '[DONE]') continue
+        const { done, value } = await reader.read()
+        if (value) buffer += dec.decode(value, {stream:true})
+        const lines = buffer.split('\n')
+        buffer = done ? '' : (lines.pop() ?? '')
+        for (const line of lines) {
+          const t = line.trim()
+          if (!t.startsWith('data:')) continue
+          const d = t.slice(5).trim(); if (d === '' || d === '[DONE]') continue
           try { const j = JSON.parse(d); const c = j.choices?.[0]?.delta?.content; if (c) { acc += c; setMsgs(m => { const cp=[...m]; cp[cp.length-1]={role:'assistant',content:acc}; return cp }) } } catch {}
         }
+        if (done) break
       }
     } catch (e: any) { setMsgs(m => [...m, {role:'system',content:'Error: '+(e?.message||'unknown')}]) }
     finally { setBusy(false) }

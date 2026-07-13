@@ -456,22 +456,44 @@ async fn runtime_start(
     }
 }
 
-/// Poll llama-server `/health` until ready (RUN-1), marking the runtime running or errored.
+/// Poll llama-server `/health` until ready (RUN-1), then keep watching liveness. If the sidecar
+/// dies after startup (OOM on first prompt, killed, crash), flip the status to Error with the log
+/// tail instead of reporting Running on a dead port. Port-guarded so a switch/stop ends the watch.
 fn spawn_health_wait(rt: Arc<runtime::RuntimeManager>, port: u16) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let url = format!("http://127.0.0.1:{}/health", port);
+        let mut ready = false;
         for _ in 0..20 {
             if let Ok(resp) = reqwest::get(&url).await {
                 if resp.status().is_success() {
                     rt.mark_running(port);
-                    return;
+                    ready = true;
+                    break;
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        let tail = rt.log_tail(8);
-        rt.mark_error(port, &format!("health check timeout. llama-server log tail:\n{}", tail));
+        if !ready {
+            let tail = rt.log_tail(8);
+            rt.mark_error(port, &format!("health check timeout. llama-server log tail:\n{}", tail));
+            return;
+        }
+        // Liveness watch: this is still the active port, and the sidecar stops responding.
+        let mut misses = 0;
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if rt.status().port != Some(port) {
+                return; // switched or stopped — nothing to watch
+            }
+            let alive = reqwest::get(&url).await.map(|r| r.status().is_success()).unwrap_or(false);
+            misses = if alive { 0 } else { misses + 1 };
+            if misses >= 2 {
+                let tail = rt.log_tail(8);
+                rt.mark_error(port, &format!("llama-server exited unexpectedly. log tail:\n{}", tail));
+                return;
+            }
+        }
     });
 }
 

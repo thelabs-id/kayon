@@ -57,22 +57,25 @@ impl DownloadManager {
         }) {
             return Ok((existing, false)); // already downloading — caller must not spawn again
         }
-        let free = free_disk_for_path(target_path)?;
-        if free < total_bytes {
-            return Err(anyhow!(
-                "Insufficient disk: need {} bytes, {} available",
-                total_bytes, free
-            ));
-        }
         let path = Path::new(target_path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        // Bytes already on disk from a prior partial transfer count toward the model — the
+        // pre-flight only needs free space for the REMAINING bytes (CAT-4, DL-1).
         let received = if path.exists() {
             std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
         } else {
             0
         };
+        let remaining = total_bytes.saturating_sub(received);
+        let free = free_disk_for_path(target_path)?;
+        if free < remaining {
+            return Err(anyhow!(
+                "Insufficient disk: need {} more bytes, {} available",
+                remaining, free
+            ));
+        }
         let state = DownloadState {
             id: uuid::Uuid::new_v4().to_string(),
             model_id: model_id.to_string(),
