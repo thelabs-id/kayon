@@ -40,7 +40,7 @@ export default function Settings() {
 
   const adopt = async (m: OllamaModel) => {
     setAdopting(`${m.name}:${m.tag}`)
-    const r = await api.ollamaAdopt({ name:m.name, tag:m.tag, digest:m.digest, blobPath:m.blobPath, sizeBytes:m.sizeBytes })
+    const r = await api.ollamaAdopt({ name:m.name, tag:m.tag })
     setAdopting(null)
     if (!r.ok) alert('Adopt failed: '+r.error)
     load()

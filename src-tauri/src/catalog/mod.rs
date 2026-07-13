@@ -90,10 +90,16 @@ pub fn save_local_catalog_raw(json_bytes: &[u8], sig_bytes: &[u8]) -> Result<()>
 }
 
 pub fn get_active_catalog() -> Result<Catalog> {
-    if let Some(local) = load_local_catalog() {
-        return Ok(local);
+    // Prefer whichever verified catalog has the higher revision. A newer bundled catalog from a
+    // fresh install must win over an older signature-verified cache, and vice-versa (CAT-5).
+    let cached = load_local_catalog();
+    match (cached, load_bundled_catalog()) {
+        (Some(local), Ok(bundled)) => {
+            Ok(if local.revision >= bundled.revision { local } else { bundled })
+        }
+        (Some(local), Err(_)) => Ok(local),
+        (None, bundled) => bundled,
     }
-    load_bundled_catalog()
 }
 
 /// Fetch + verify the remote catalog. Returns the parsed catalog plus the raw signed bytes and
@@ -102,7 +108,9 @@ pub fn get_active_catalog() -> Result<Catalog> {
 pub async fn fetch_remote_catalog(
     db: &std::sync::Arc<crate::db::Database>,
 ) -> Result<(Catalog, Vec<u8>, Vec<u8>)> {
-    let base_url = "https://raw.githubusercontent.com/thelabs-id/kayon/main/catalog";
+    // Points at where the signed catalog actually lives in the repo. Trust rides on the signature
+    // (CAT-5), so the host need not be trusted — this is just the fetch location.
+    let base_url = "https://raw.githubusercontent.com/thelabs-id/kayon/main/src-tauri/catalog";
     let json_url = format!("{}/catalog.json", base_url);
     let sig_url = format!("{}/catalog.json.sig", base_url);
 

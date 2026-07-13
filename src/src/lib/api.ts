@@ -260,7 +260,8 @@ export const api = {
     apiFetch<ApiResponse<DownloadState>>('/api/downloads/start', { method: 'POST', body: JSON.stringify(body) }),
   cancelDownload: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/downloads/${id}/cancel`, { method: 'DELETE' }),
   ollamaModels: () => apiFetch<ApiResponse<OllamaModel[]>>('/api/ollama/models'),
-  ollamaAdopt: (body: { name: string; tag: string; digest: string; blobPath: string; sizeBytes: number }) =>
+  // Server re-resolves the blob + digest from the manifest; the client only names the model.
+  ollamaAdopt: (body: { name: string; tag: string }) =>
     apiFetch<ApiResponse<InstalledModel>>('/api/ollama/adopt', { method: 'POST', body: JSON.stringify(body) }),
   runtimeStart: (body: { modelPath: string; modelId: string; quantLabel: string; nGpuLayers: number; contextLength: number; runtimeArgs: string[] }) =>
     apiFetch<ApiResponse<RuntimeStatus>>('/api/runtime/start', { method: 'POST', body: JSON.stringify(body) }),

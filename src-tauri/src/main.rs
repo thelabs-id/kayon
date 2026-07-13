@@ -376,28 +376,42 @@ async fn ollama_adopt(
 ) -> impl IntoResponse {
     let lib_dir = library::library_dir();
     let _ = std::fs::create_dir_all(&lib_dir);
+
+    // Re-resolve the adoption target from the discovered Ollama manifests by (name, tag). The
+    // client only names which model to adopt; the trusted blob path + digest come from the
+    // server's manifest scan, never from the request body (defence against arbitrary-path linking).
+    let discovered = match ollama::discover_ollama_models(&library::deterministic_path("probe", "probe")) {
+        Ok(models) => models.into_iter().find(|m| m.name == req.name && m.tag == req.tag),
+        Err(e) => return err_json(&e.to_string()).into_response(),
+    };
+    let m = match discovered {
+        Some(m) => m,
+        None => return err_json("no matching Ollama model found for that name:tag").into_response(),
+    };
+    let mode = if m.same_volume_as_library { ollama::AdoptMode::Link } else { ollama::AdoptMode::Copy };
+
     // Adoption hashes the blob (OLL-3 gate) which is CPU/IO-bound for multi-GB models; run it on
     // the blocking pool so it never stalls the async runtime handling other requests.
     let (blob_path, lib_str, name, tag, digest, size) = (
-        req.blob_path.clone(), lib_dir.to_string_lossy().to_string(),
-        req.name.clone(), req.tag.clone(), req.digest.clone(), req.size_bytes,
+        m.blob_path.clone(), lib_dir.to_string_lossy().to_string(),
+        m.name.clone(), m.tag.clone(), m.digest.clone(), m.size_bytes,
     );
     let adopt_result = tokio::task::spawn_blocking(move || {
-        ollama::adopt_model(&blob_path, &lib_str, &name, &tag, &digest, size)
+        ollama::adopt_model(&blob_path, &lib_str, &name, &tag, &digest, size, mode)
     }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("adoption task panicked: {}", e)));
     match adopt_result {
-        Ok(path) => {
+        Ok((path, _copied)) => {
             let model = InstalledModel {
                 id: uuid::Uuid::new_v4().to_string(),
-                model_id: format!("{}:{}", req.name, req.tag),
-                quant_label: req.quantization.clone().unwrap_or("unknown".into()),
+                model_id: format!("{}:{}", m.name, m.tag),
+                quant_label: m.quantization.clone().unwrap_or("unknown".into()),
                 path: path.clone(),
-                bytes: req.size_bytes,
-                sha256: req.digest.clone(),
+                bytes: m.size_bytes,
+                sha256: m.digest.clone(),
                 source: ModelSource::Adopted,
                 installed_at: chrono::Utc::now(),
-                ollama_tag: Some(format!("{}:{}", req.name, req.tag)),
-                ollama_digest: Some(req.digest.clone()),
+                ollama_tag: Some(format!("{}:{}", m.name, m.tag)),
+                ollama_digest: Some(m.digest.clone()),
             };
             if let Err(e) = s.db.insert_installed_model(&model) {
                 return err_json(&e.to_string()).into_response();
@@ -434,14 +448,14 @@ fn spawn_health_wait(rt: Arc<runtime::RuntimeManager>, port: u16) {
         for _ in 0..20 {
             if let Ok(resp) = reqwest::get(&url).await {
                 if resp.status().is_success() {
-                    rt.mark_running();
+                    rt.mark_running(port);
                     return;
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         let tail = rt.log_tail(8);
-        rt.mark_error(&format!("health check timeout. llama-server log tail:\n{}", tail));
+        rt.mark_error(port, &format!("health check timeout. llama-server log tail:\n{}", tail));
     });
 }
 
@@ -687,13 +701,10 @@ struct DownloadStartReq {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OllamaAdoptReq {
+    // Only the identity is accepted; the trusted blob path + digest are re-resolved server-side
+    // from the Ollama manifest scan (never trusted from the client).
     name: String,
     tag: String,
-    digest: String,
-    blob_path: String,
-    size_bytes: u64,
-    #[serde(default)]
-    quantization: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

@@ -90,7 +90,7 @@ pub fn discover_ollama_models(library_path: &str) -> Result<Vec<OllamaModel>> {
             let adopt_reason = if !blob_exists {
                 Some("blob not found on disk".into())
             } else if !same_volume {
-                Some("cross-volume: copy or relocate needed".into())
+                Some("on a different volume — adopting will copy the blob (disk pre-flight applies)".into())
             } else if needs_newer_runtime {
                 Some(format!(
                     "adoptable, but architecture '{}' needs a newer llama.cpp runtime to load",
@@ -111,9 +111,9 @@ pub fn discover_ollama_models(library_path: &str) -> Result<Vec<OllamaModel>> {
                 parameter_size: None,
                 quantization: None,
                 same_volume_as_library: same_volume,
-                // Cross-volume/blob-missing block adoption here; a newer-runtime need does not
-                // (OLL-6: adopt but flag), so it stays adoptable.
-                adoptable: blob_exists && same_volume,
+                // Adoptable if the blob exists — same-volume hard-links, cross-volume copies with a
+                // disk pre-flight (OLL-4). Only a missing blob truly blocks adoption.
+                adoptable: blob_exists,
                 adopt_reason,
                 needs_newer_runtime,
             });
@@ -124,6 +124,15 @@ pub fn discover_ollama_models(library_path: &str) -> Result<Vec<OllamaModel>> {
     Ok(models)
 }
 
+pub enum AdoptMode {
+    /// Same-volume in-place hard link (default, zero bytes copied).
+    Link,
+    /// Cross-volume: copy the blob into the library after a disk pre-flight (OLL-4).
+    Copy,
+}
+
+/// Adopt a discovered Ollama blob. `blob_path`/`digest` must come from the server-side manifest
+/// resolution, never from client input. Returns (library_path, copied?).
 pub fn adopt_model(
     blob_path: &str,
     library_path: &str,
@@ -131,18 +140,16 @@ pub fn adopt_model(
     tag: &str,
     digest: &str,
     _size: u64,
-) -> Result<String> {
+    mode: AdoptMode,
+) -> Result<(String, bool)> {
     let blob = Path::new(blob_path);
     if !blob.exists() {
         return Err(anyhow!("blob not found: {}", blob_path));
     }
 
-    // OLL-3 checksum gate: the blob's content must actually hash to the manifest digest before
-    // it enters the library. We never trust the caller-supplied digest or the filename alone —
-    // that's what makes "record the digest as the checksum for free" honest.
+    // OLL-3 / §5 checksum gate: the blob's content must actually hash to the manifest digest
+    // before it enters the library. A malformed digest can gate nothing, so adoption fails.
     let expected = digest.trim().to_lowercase().replace("sha256:", "");
-    // The digest MUST be a well-formed SHA-256; a malformed one can't gate anything, so adoption
-    // fails rather than silently linking an unverified blob (OLL-3 / §5 checksum gate).
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(anyhow!("invalid Ollama digest '{}' — expected a 64-char SHA-256", digest));
     }
@@ -155,15 +162,43 @@ pub fn adopt_model(
     }
 
     let dest = PathBuf::from(library_path).join(format!("{}-{}.gguf", model_name, tag));
-    // Adopt in place via hard link — zero bytes copied. On a cross-volume attempt this returns
-    // an OS error (links can't span volumes); the caller surfaces the copy/relocate choice
-    // (OLL-4) rather than silently copying.
     if dest.exists() {
-        return Ok(dest.to_string_lossy().to_string());
+        return Ok((dest.to_string_lossy().to_string(), false));
     }
-    std::fs::hard_link(blob, &dest)
-        .map_err(|e| anyhow!("hard link failed (cross-volume? use copy/relocate): {}", e))?;
-    Ok(dest.to_string_lossy().to_string())
+
+    match mode {
+        AdoptMode::Link => {
+            // In-place hard link — zero bytes copied. Fails across volumes; caller then offers Copy.
+            std::fs::hard_link(blob, &dest).map_err(|e| {
+                anyhow!("hard link failed (different volume? choose copy or relocate — OLL-4): {}", e)
+            })?;
+            Ok((dest.to_string_lossy().to_string(), false))
+        }
+        AdoptMode::Copy => {
+            // Cross-volume copy with a disk pre-flight (OLL-4) — never silent.
+            let blob_size = std::fs::metadata(blob)?.len();
+            let free = free_disk_for(&dest);
+            if free < blob_size {
+                return Err(anyhow!(
+                    "insufficient disk to copy: need {} bytes, {} free on target volume",
+                    blob_size, free
+                ));
+            }
+            std::fs::copy(blob, &dest)?;
+            Ok((dest.to_string_lossy().to_string(), true))
+        }
+    }
+}
+
+fn free_disk_for(path: &Path) -> u64 {
+    let root = path.ancestors().last().unwrap_or(path).to_string_lossy().to_string();
+    for disk in sysinfo::Disks::new_with_refreshed_list().list() {
+        let mount = disk.mount_point().to_string_lossy();
+        if root.starts_with(&*mount) {
+            return disk.available_space();
+        }
+    }
+    0
 }
 
 fn hash_file(path: &Path) -> Result<String> {

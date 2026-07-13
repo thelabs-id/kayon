@@ -130,16 +130,22 @@ impl RuntimeManager {
         buf.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
     }
 
-    pub fn mark_running(&self) {
+    // Port-guarded so a stale health probe from a previous model (since stopped or switched)
+    // can't overwrite the status of the current/next runtime.
+    pub fn mark_running(&self, port: u16) {
         let mut status = self.status.lock().unwrap();
-        status.kind = RuntimeStatusKind::Running;
-        status.message = Some("ready".into());
+        if status.port == Some(port) {
+            status.kind = RuntimeStatusKind::Running;
+            status.message = Some("ready".into());
+        }
     }
 
-    pub fn mark_error(&self, msg: &str) {
+    pub fn mark_error(&self, port: u16, msg: &str) {
         let mut status = self.status.lock().unwrap();
-        status.kind = RuntimeStatusKind::Error;
-        status.message = Some(msg.to_string());
+        if status.port == Some(port) {
+            status.kind = RuntimeStatusKind::Error;
+            status.message = Some(msg.to_string());
+        }
     }
 
     pub fn stop(&self) -> Result<()> {
