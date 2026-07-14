@@ -29,9 +29,13 @@ export default function Library({ goBrowser, goPrivacy, onChange, goChat }: {
   const load = async () => { await Promise.all([loadModels(), loadOllama()]) }
 
   const activeCountRef = useRef(0)
+  const countActive = (ds: DownloadState[]) => ds.filter(x => x.status === 'active' || x.status === 'queued').length
   useEffect(() => {
     load()
-    api.downloads().then(d => { if (d.ok && d.data) setDownloads(d.data) })
+    // Seed the active count from the initial fetch too — otherwise a download that is already
+    // active on mount and finishes before the first tick would leave the ref at 0, the
+    // `activeNow < ref` completion check would never fire, and the finished model would not appear.
+    api.downloads().then(d => { if (d.ok && d.data) { setDownloads(d.data); activeCountRef.current = countActive(d.data) } })
     // Poll ONLY the cheap, fast-changing downloads (~ms) for live progress. Re-scanning the library
     // and the slow Ollama store every tick used to pile up multi-second requests and freeze the page.
     // When a download finishes (active count drops), refresh the library so the new model appears.
@@ -39,7 +43,7 @@ export default function Library({ goBrowser, goPrivacy, onChange, goChat }: {
       const d = await api.downloads()
       if (!d.ok || !d.data) return
       setDownloads(d.data)
-      const activeNow = d.data.filter(x => x.status === 'active' || x.status === 'queued').length
+      const activeNow = countActive(d.data)
       if (activeNow < activeCountRef.current) loadModels()
       activeCountRef.current = activeNow
     }, 1500)
