@@ -11,10 +11,10 @@ use crate::ipc::*;
 
 pub struct DownloadManager {
     client: reqwest::Client,
-    // Ids of downloads the user has asked to STOP (cancel or pause); the streaming loop polls this
-    // every chunk and aborts, so a stopped transfer never later completes and installs the model.
-    // The endpoint sets the row's status (Cancelled/Paused) — the loop only stops (DL).
-    cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
+    // Downloads the user has asked to STOP, mapped to WHY (Paused or Cancelled). The streaming loop
+    // polls this every chunk; on a hit it re-asserts that status in the DB and aborts, so a stopped
+    // transfer never completes/installs and a racing "Active" progress write can't leave it stuck.
+    stop: std::sync::Mutex<std::collections::HashMap<String, DownloadStatus>>,
     // One async lock per download id, held by a drive task for its whole lifetime. A resume waits
     // on it so it can't spawn a second writer while the paused task is still blocked in the stream
     // (which would let two tasks append to the same file and corrupt the partial download).
@@ -29,13 +29,14 @@ impl DownloadManager {
             .expect("failed to build reqwest client");
         Self {
             client,
-            cancelled: std::sync::Mutex::new(std::collections::HashSet::new()),
+            stop: std::sync::Mutex::new(std::collections::HashMap::new()),
             drive_locks: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
-    fn stop_requested(&self, id: &str) -> bool {
-        self.cancelled.lock().unwrap().contains(id)
+    /// The stop reason (Paused/Cancelled) if the user has requested this download stop, else None.
+    fn stop_reason(&self, id: &str) -> Option<DownloadStatus> {
+        self.stop.lock().unwrap().get(id).cloned()
     }
 
     fn drive_lock(&self, id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
@@ -140,9 +141,24 @@ impl DownloadManager {
         let lock = self.drive_lock(download_id);
         let _guard = lock.lock().await;
 
-        // Now that the previous task has exited, clear any pause/cancel stop signal so this task's
-        // streaming loop isn't immediately aborted. (A fresh start isn't in the set — harmless.)
-        self.cancelled.lock().unwrap().remove(download_id);
+        // Atomically decide whether to proceed: if the user cancelled while we waited on the lock,
+        // honour it and abort instead of resurrecting the transfer. Otherwise clear the (paused)
+        // stop signal so this task's loop isn't immediately aborted.
+        let cancelled_while_waiting = {
+            let mut stop = self.stop.lock().unwrap();
+            if matches!(stop.get(download_id), Some(DownloadStatus::Cancelled)) {
+                true
+            } else {
+                stop.remove(download_id);
+                false
+            }
+        };
+        if cancelled_while_waiting {
+            // Re-assert Cancelled: the resume endpoint may have flipped the row to Active just before
+            // the cancel landed, so make the persisted status match the user's final intent.
+            db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+            return Ok(());
+        }
 
         let state = db.get_download(download_id)?
             .ok_or_else(|| anyhow!("download not found"))?;
@@ -220,8 +236,10 @@ impl DownloadManager {
             while let Some(chunk) = stream.next().await {
                 // Cooperative stop: if the user cancelled or paused this download, stop streaming so
                 // it never later marks itself completed/installed. The partial file is left on disk
-                // for a resume (DL-1); the endpoint already set the row's status (Cancelled/Paused).
-                if self.stop_requested(download_id) {
+                // for a resume (DL-1). Re-assert the stop status here in case a racing progress
+                // write flipped the row back to Active after the endpoint set Paused/Cancelled.
+                if let Some(reason) = self.stop_reason(download_id) {
+                    db.set_download_status(download_id, &reason)?;
                     return Ok(());
                 }
                 let chunk = chunk?;
@@ -262,7 +280,11 @@ impl DownloadManager {
                         eta_seconds: eta,
                         status: DownloadStatus::Active,
                     };
-                    db.update_download_progress(download_id, total_received, &DownloadStatus::Active, throughput, eta)?;
+                    // Don't flip the row back to Active if a stop was requested since the last chunk
+                    // check — that would clobber the endpoint's Paused/Cancelled and leave it stuck.
+                    if self.stop_reason(download_id).is_none() {
+                        db.update_download_progress(download_id, total_received, &DownloadStatus::Active, throughput, eta)?;
+                    }
                     if let Some(tx) = &progress_tx {
                         let _ = tx.send(progress).await;
                     }
@@ -272,9 +294,10 @@ impl DownloadManager {
             file.flush()?;
         }
 
-        // If stopped during the transfer or verification window, do not install (DL). Status was
-        // already set by the pause/cancel endpoint.
-        if self.stop_requested(download_id) {
+        // If stopped during the transfer or verification window, do not install (DL). Re-assert the
+        // stop status so a racing progress write can't leave the row Active.
+        if let Some(reason) = self.stop_reason(download_id) {
+            db.set_download_status(download_id, &reason)?;
             return Ok(());
         }
 
@@ -318,17 +341,18 @@ impl DownloadManager {
     }
 
     pub async fn cancel_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
-        // Signal the in-flight streaming task to stop, then mark the row cancelled.
-        self.cancelled.lock().unwrap().insert(download_id.to_string());
+        // Record the stop reason (the loop re-asserts it) and mark the row cancelled. Cancel wins
+        // over a concurrent pause/resume: the resume path bails when it sees a Cancelled reason.
+        self.stop.lock().unwrap().insert(download_id.to_string(), DownloadStatus::Cancelled);
         db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
         Ok(())
     }
 
-    /// Pause an in-flight download: signal the streaming loop to stop and mark the row Paused. The
-    /// partial bytes stay on disk (writes are unbuffered), so `resume_download` continues from the
-    /// file length via a Range request — same mechanism as the DL-1 restart resume.
+    /// Pause an in-flight download: record the stop reason so the streaming loop aborts and mark the
+    /// row Paused. The partial bytes stay on disk (writes are unbuffered), so `resume_download`
+    /// continues from the file length via a Range request — same mechanism as the DL-1 restart.
     pub async fn pause_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
-        self.cancelled.lock().unwrap().insert(download_id.to_string());
+        self.stop.lock().unwrap().insert(download_id.to_string(), DownloadStatus::Paused);
         db.set_download_status(download_id, &DownloadStatus::Paused)?;
         Ok(())
     }
