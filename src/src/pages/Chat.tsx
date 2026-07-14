@@ -49,11 +49,15 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const stats = { gen: 0, eval: 0 } // live tok/s comes from the shared telemetry / benchmark
 
   const newChat = () => {
+    if (busy) return // don't reset the view out from under an in-flight stream
     setActiveId(null); setActiveTitle('New chat'); setMsgs([]); setInput('')
     setSys(DEFAULT_SYS); setEditingTitle(false)
   }
 
   const openSession = async (id: string) => {
+    // Switching sessions mid-stream would let the still-running loop write chunks into the newly
+    // shown transcript while the assistant reply persists to the old session. Block it while busy.
+    if (busy || id === activeId) return
     const r = await api.chatSession(id)
     if (!r.ok || !r.data) return
     const d = r.data
@@ -64,6 +68,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   }
 
   const removeSession = async (id: string) => {
+    if (busy) return // deleting the streaming session mid-flight would strand the in-flight append
     await api.deleteChatSession(id)
     setConfirmDel(null)
     if (id === activeId) newChat()
@@ -126,8 +131,8 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const gpuUtil = gpu ? gpu.telemetry.utilizationPercent.toFixed(0) : '0'
 
   const rail = (
-    <div className={`chatsessions softscroll ${railOpen ? '' : 'hidden'}`}>
-      <button className="btn btn-sm newchat" onClick={newChat}>＋ New chat</button>
+    <div className={`chatsessions softscroll ${railOpen ? '' : 'hidden'} ${busy ? 'locked' : ''}`} title={busy ? 'Locked while generating' : ''}>
+      <button className="btn btn-sm newchat" onClick={newChat} disabled={busy}>＋ New chat</button>
       <div className="slabel" style={{ marginTop: 14 }}>History</div>
       {sessions.length === 0 && <div className="mono faint" style={{ fontSize: 11, padding: '8px 6px' }}>No saved chats yet.</div>}
       {sessions.map(s => (

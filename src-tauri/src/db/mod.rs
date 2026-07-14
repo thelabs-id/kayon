@@ -208,6 +208,18 @@ impl Database {
     /// assigned ordinal so callers report the true position rather than a placeholder.
     pub fn append_chat_message(&self, m: &ChatMessage) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
+        // Refuse to append to a session that doesn't exist (e.g. a stale id from a deleted chat):
+        // otherwise the row inserts with no parent and the UPDATE below silently touches zero rows,
+        // leaving an orphaned message that never surfaces in any list or detail view. The whole
+        // method holds the connection lock, so this existence check can't race a concurrent delete.
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = ?1)",
+            params![m.session_id],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            anyhow::bail!("chat session {} does not exist", m.session_id);
+        }
         let next: i64 = conn.query_row(
             "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chat_messages WHERE session_id = ?1",
             params![m.session_id],

@@ -158,6 +158,8 @@
 /* Chat session rail (RUN-5) */
 .chatsessions{width:236px;flex:none;border-right:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column}
 .chatsessions.hidden{display:none}
+/* Locked while a response is streaming, so switching chats can't corrupt the transcript. */
+.chatsessions.locked .sessitem{pointer-events:none;opacity:.5}
 .newchat{width:100%;justify-content:center;border:1px dashed var(--line2);background:transparent;color:var(--ink)}
 .newchat:hover{border-color:var(--iris);color:var(--iris)}
 .sessitem{position:relative;padding:9px 30px 9px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px;border:1px solid transparent}
