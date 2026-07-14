@@ -63,13 +63,15 @@ impl DownloadManager {
                 "checksum not pinned for this entry — the catalog generator (CAT-6) must populate a real SHA-256 before download is allowed"
             ));
         }
-        // Don't start a second transfer for a target that's already downloading — two tasks
-        // appending to the same GGUF would corrupt it. Return the in-flight row instead.
+        // Don't start a second transfer for a target that already has one in progress — two tasks
+        // (different ids) appending to the same GGUF would corrupt it, and the per-id drive locks
+        // wouldn't serialize them. `Paused` counts: its partial file owns the target, so return that
+        // row and let the caller resume it rather than spawn a duplicate.
         if let Some(existing) = db.list_downloads()?.into_iter().find(|d| {
             d.target_path == target_path
-                && matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued)
+                && matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued | DownloadStatus::Paused)
         }) {
-            return Ok((existing, false)); // already downloading — caller must not spawn again
+            return Ok((existing, false)); // already in progress — caller must not spawn again
         }
         let path = Path::new(target_path);
         if let Some(parent) = path.parent() {
@@ -358,6 +360,14 @@ impl DownloadManager {
         // Never override a Cancelled reason — cancellation must win over a racing pause.
         if matches!(stop.get(download_id), Some(DownloadStatus::Cancelled)) {
             return Ok(());
+        }
+        // Only an in-flight transfer can be paused. Ignore a stale pause that lands after the drive
+        // already completed/failed/quarantined the row — otherwise it would resurrect an installed
+        // model as a resumable paused download. (Checked under the stop lock so it can't race a
+        // concurrent cancel.)
+        match db.get_download(download_id)? {
+            Some(d) if matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued) => {}
+            _ => return Ok(()),
         }
         stop.insert(download_id.to_string(), DownloadStatus::Paused);
         db.set_download_status(download_id, &DownloadStatus::Paused)?;
