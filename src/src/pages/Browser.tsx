@@ -91,6 +91,7 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
 
 export default function Browser({ machine, goLibrary }: { machine: MachineProfile | null; goLibrary: () => void }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([])
+  const [catMeta, setCatMeta] = useState<{ source: string; verified?: string }>({ source: '' })
   const [verdicts, setVerdicts] = useState<FitVerdict[]>([])
   const [ctx, setCtx] = useState(4096)
   const [kv, setKv] = useState(false)
@@ -99,7 +100,7 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
 
   const load = async () => {
     const [c, v] = await Promise.all([api.catalog(), api.verdicts(ctx, kv ? 1 : 2)])
-    if (c.ok && c.data) setCatalog(c.data.entries)
+    if (c.ok && c.data) { setCatalog(c.data.entries); setCatMeta({ source: c.data.source, verified: c.data.verifiedSignature }) }
     if (v.ok && v.data) setVerdicts(v.data)
   }
   useEffect(() => { load() }, [ctx, kv])
@@ -128,7 +129,7 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
     <div className="cinner">
       <div className="pagehead">
         <div>
-          <p className="eyebrow">Catalog · signed &amp; verified</p>
+          <p className="eyebrow">{catMeta.source === 'huggingface' ? 'Catalog · live from Hugging Face · checksum-pinned' : catMeta.verified === 'verified' ? 'Catalog · bundled · signed &amp; verified' : 'Catalog'}</p>
           <h1 className="ptitle">What actually fits</h1>
           <p className="psub">Every quant carries an honest verdict for <span className="iris">this</span> GPU — weights + KV cache + compute buffers vs. real free VRAM. Not <span className="mono">file_size &lt; VRAM</span>.</p>
         </div>
