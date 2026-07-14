@@ -196,6 +196,13 @@ These are documented tradeoffs, not silent divergences:
   a secret store / HSM, never the repo.
 - **Fit constants** (`cuda_overhead`, `compute_buffer`, headroom, comfort margin) ship at the §7
   conservative defaults; Phase-3 on-device calibration via the HW-5 benchmark is the follow-up.
+- **Model-browser download UX (v1.2.0).** Installs show a live progress bar (percent / bytes / speed /
+  ETA) inline on the card with **pause / resume / cancel** controls — pause keeps the partial file and
+  resume continues from the on-disk offset via an HTTP Range request (same mechanism as the DL-1 restart
+  resume); progress survives navigating away and back. "In library" is derived from the actual library
+  (not a stale download row), so a deleted model is immediately re-installable. While launch-time catalog
+  discovery (CAT-7) runs, the browser shows a "finding the best models…" indicator and transparently
+  reloads when the newer catalog lands. Removing a downloaded model is the Library's two-step delete.
 
 ## License
 
