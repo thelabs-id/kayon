@@ -207,6 +207,15 @@ These are documented tradeoffs, not silent divergences:
   (not a stale download row), so a deleted model is immediately re-installable. While launch-time catalog
   discovery (CAT-7) runs, the browser shows a "finding the best models…" indicator and transparently
   reloads when the newer catalog lands. Removing a downloaded model is the Library's two-step delete.
+- **Desktop CSRF-guard fix (v1.2.1).** The loopback control API's CSRF guard rejected any mutating
+  request whose `Sec-Fetch-Site` was `cross-site` — but the Tauri window loads from `tauri.localhost`
+  and calls the API on `127.0.0.1:9518`, which *is* cross-site, so every write (load, download,
+  pause/resume/cancel, adopt, delete, settings) was silently 403'd in the installed app while reads
+  still worked. The guard now treats the (unspoofable) `Origin` allow-list as authoritative — the
+  desktop window and served UI pass, a foreign origin is still rejected, and `Sec-Fetch-Site` remains
+  the fallback only when no `Origin` is present. Covered by `csrf_check` unit tests. The UI's API
+  client also no longer throws on a non-JSON/non-2xx response, so a rejected call surfaces as a
+  visible error instead of a silent no-op.
 
 ## License
 

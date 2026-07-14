@@ -6,11 +6,25 @@ const BASE = (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS
   : ''
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts?.headers },
-    ...opts,
-  })
-  return resp.json()
+  // Never throw: a thrown fetch/parse error in a caller without try/catch becomes a silent
+  // no-op (e.g. a mutating request rejected by the CSRF guard returns a 403 *plain-text* body,
+  // not JSON). Instead, always resolve to an ApiResponse-shaped value so callers can surface the
+  // failure. Endpoints that return a non-ApiResponse payload (few) still parse via the happy path.
+  try {
+    const resp = await fetch(`${BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...opts?.headers },
+      ...opts,
+    })
+    const text = await resp.text()
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      // Non-JSON body (error middleware, proxy, etc.). Represent it as a failed ApiResponse.
+      return { ok: false, error: text || `HTTP ${resp.status}` } as unknown as T
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'network error' } as unknown as T
+  }
 }
 
 export interface ApiResponse<T> {

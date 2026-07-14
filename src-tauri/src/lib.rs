@@ -204,30 +204,49 @@ const ALLOWED_ORIGINS: &[&str] = &[
 ];
 
 /// Reject cross-site mutating requests to the loopback control API (CSRF defence). Safe methods
-/// (GET/HEAD/OPTIONS) pass. For mutating methods we reject when `Sec-Fetch-Site` is cross-site, or
-/// when an `Origin`/`Referer` is present that is not a Kayon origin. Non-browser clients (curl,
-/// the app's own IPC) send no Origin and are allowed.
+/// (GET/HEAD/OPTIONS) pass. For mutating methods the `Origin` header is authoritative: a browser
+/// always sends it on a cross-origin request and cannot forge it from script, so an Origin on the
+/// allow-list proves the caller is our own UI — including the Tauri desktop window, whose origin
+/// (`tauri.localhost`) is legitimately *cross-site* to this loopback port. We must therefore gate
+/// on the Origin allow-list and NOT reject purely on `Sec-Fetch-Site: cross-site`, or the desktop
+/// app's own requests (load, download, adopt, delete, settings) get 403'd. Only when no Origin is
+/// present (non-browser clients: curl, the app's IPC) do we fall back to `Sec-Fetch-Site` as
+/// defence in depth. A real malicious page carries a non-Kayon Origin and is rejected.
+/// Pure CSRF decision, factored out so it is unit-testable without an HTTP round-trip. Returns
+/// `Err(reason)` to reject a mutating request, `Ok(())` to allow it. See `csrf_guard`'s doc for the
+/// rationale. The `tauri.localhost` case is the regression this guards: the desktop window is
+/// cross-site to the loopback port, so it MUST be allowed via its (unspoofable) Origin, never
+/// rejected on `Sec-Fetch-Site`.
+fn csrf_check(mutating: bool, origin: Option<&str>, sec_fetch_site: Option<&str>) -> Result<(), &'static str> {
+    if !mutating {
+        return Ok(());
+    }
+    match origin {
+        // Trusted Origin (incl. the Tauri window's tauri.localhost). A browser sets Origin on every
+        // mutating request and JS cannot spoof it, so this is the real CSRF gate. Do NOT additionally
+        // reject on Sec-Fetch-Site here — the desktop window is cross-site by design.
+        Some(o) if ALLOWED_ORIGINS.iter().any(|a| o == *a) => Ok(()),
+        // Origin present but not ours: a genuine cross-site caller (a malicious page). Reject.
+        Some(_) => Err("disallowed origin"),
+        // No Origin: not a browser-initiated cross-origin request. Allow non-browser clients (curl,
+        // IPC), but fall back to Sec-Fetch-Site as defence in depth.
+        None => match sec_fetch_site {
+            Some("cross-site") | Some("same-site") => Err("cross-site request rejected"),
+            _ => Ok(()),
+        },
+    }
+}
+
 async fn csrf_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let method = req.method();
-    let mutating = !matches!(method, &axum::http::Method::GET | &axum::http::Method::HEAD | &axum::http::Method::OPTIONS);
-    if mutating {
-        let headers = req.headers();
-        if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-            if site == "cross-site" || site == "same-site" {
-                return (StatusCode::FORBIDDEN, "cross-site request rejected").into_response();
-            }
-        }
-        let origin_ok = |val: Option<&str>| match val {
-            None => true, // non-browser client (no Origin) — allowed
-            Some(o) => ALLOWED_ORIGINS.iter().any(|a| o == *a),
-        };
-        let origin = headers.get("origin").and_then(|v| v.to_str().ok());
-        if !origin_ok(origin) {
-            return (StatusCode::FORBIDDEN, "disallowed origin").into_response();
-        }
+    let mutating = !matches!(req.method(), &axum::http::Method::GET | &axum::http::Method::HEAD | &axum::http::Method::OPTIONS);
+    let headers = req.headers();
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if let Err(reason) = csrf_check(mutating, origin, site) {
+        return (StatusCode::FORBIDDEN, reason).into_response();
     }
     next.run(req).await
 }
@@ -1133,4 +1152,50 @@ struct BenchmarkReq {
 #[serde(rename_all = "camelCase")]
 struct ToggleReq {
     enabled: bool,
+}
+
+#[cfg(test)]
+mod csrf_tests {
+    use super::csrf_check;
+
+    // Regression for v1.2.1: the Tauri desktop window loads from `tauri.localhost` and calls the
+    // loopback API on 127.0.0.1:9518 — a *cross-site* request. It must be ALLOWED via its Origin,
+    // or every mutating action (load, download, adopt, delete, settings) silently 403s in the app.
+    #[test]
+    fn tauri_window_cross_site_post_is_allowed() {
+        // This is exactly what WebView2 sends: allowed Origin + Sec-Fetch-Site: cross-site.
+        assert!(csrf_check(true, Some("http://tauri.localhost"), Some("cross-site")).is_ok());
+        assert!(csrf_check(true, Some("https://tauri.localhost"), Some("cross-site")).is_ok());
+    }
+
+    #[test]
+    fn served_ui_origins_are_allowed() {
+        for o in ["http://127.0.0.1:9518", "http://localhost:9518", "http://127.0.0.1:3000", "http://localhost:3000"] {
+            assert!(csrf_check(true, Some(o), Some("same-origin")).is_ok(), "{o} should pass");
+        }
+    }
+
+    #[test]
+    fn malicious_cross_site_origin_is_rejected() {
+        // A page the user visited firing a "simple" cross-site POST: browser attaches its Origin,
+        // which JS cannot forge, so the non-Kayon Origin is caught regardless of Sec-Fetch-Site.
+        assert_eq!(csrf_check(true, Some("https://evil.example"), Some("cross-site")), Err("disallowed origin"));
+        assert_eq!(csrf_check(true, Some("https://evil.example"), None), Err("disallowed origin"));
+    }
+
+    #[test]
+    fn no_origin_falls_back_to_sec_fetch_site() {
+        // Non-browser client (curl, IPC): no Origin, allowed.
+        assert!(csrf_check(true, None, None).is_ok());
+        // Defence in depth: a browser request that somehow omitted Origin but is cross/same-site.
+        assert_eq!(csrf_check(true, None, Some("cross-site")), Err("cross-site request rejected"));
+        assert_eq!(csrf_check(true, None, Some("same-site")), Err("cross-site request rejected"));
+        assert!(csrf_check(true, None, Some("same-origin")).is_ok());
+    }
+
+    #[test]
+    fn safe_methods_always_pass() {
+        // GET/HEAD/OPTIONS map to mutating=false and are never gated, even from a foreign origin.
+        assert!(csrf_check(false, Some("https://evil.example"), Some("cross-site")).is_ok());
+    }
 }
