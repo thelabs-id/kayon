@@ -116,6 +116,11 @@ pub fn start_api_server() {
         .route("/api/privacy/telemetry/toggle", post(telemetry_toggle))
         .route("/api/privacy/telemetry/preview", get(telemetry_preview))
         .route("/api/prefs/{key}", get(get_pref).put(set_pref))
+        .route("/api/chat/sessions", get(list_chat_sessions).post(create_chat_session))
+        .route("/api/chat/sessions/{id}", get(get_chat_session).delete(delete_chat_session))
+        .route("/api/chat/sessions/{id}/rename", post(rename_chat_session))
+        .route("/api/chat/sessions/{id}/settings", post(update_chat_settings))
+        .route("/api/chat/sessions/{id}/messages", post(append_chat_message))
         .fallback(static_handler)
         // Defence in depth against CSRF to the loopback control API: CORS blocks reading
         // responses and preflighted requests, but a malicious page can still fire "simple"
@@ -801,6 +806,129 @@ async fn set_pref(
     let val = body.as_str().unwrap_or(&body.to_string()).to_string();
     match s.db.set_preference(&key, &val) {
         Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+// ---- Chat sessions (RUN-5): local-only conversation history ----
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSessionBody {
+    title: Option<String>,
+    model_id: Option<String>,
+    system_prompt: Option<String>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    max_tokens: Option<i64>,
+}
+
+async fn list_chat_sessions(State(s): State<AppState>) -> impl IntoResponse {
+    match s.db.list_chat_sessions() {
+        Ok(v) => ok_json(v).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+async fn create_chat_session(
+    State(s): State<AppState>,
+    Json(body): Json<CreateSessionBody>,
+) -> impl IntoResponse {
+    let now = chrono::Utc::now();
+    let session = ipc::ChatSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: body.title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "New chat".into()),
+        model_id: body.model_id,
+        system_prompt: body.system_prompt.unwrap_or_default(),
+        temperature: body.temperature.unwrap_or(0.7),
+        top_p: body.top_p.unwrap_or(0.95),
+        max_tokens: body.max_tokens.unwrap_or(2048),
+        created_at: now,
+        updated_at: now,
+    };
+    match s.db.create_chat_session(&session) {
+        Ok(_) => ok_json(session).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+async fn get_chat_session(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    match s.db.get_chat_session(&id) {
+        Ok(Some(session)) => match s.db.get_chat_messages(&id) {
+            Ok(messages) => ok_json(ipc::ChatSessionDetail { session, messages }).into_response(),
+            Err(e) => err_json(&e.to_string()).into_response(),
+        },
+        Ok(None) => err_json("session not found").into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+async fn delete_chat_session(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    match s.db.delete_chat_session(&id) {
+        Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RenameBody { title: String }
+
+async fn rename_chat_session(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameBody>,
+) -> impl IntoResponse {
+    match s.db.rename_chat_session(&id, &body.title) {
+        Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsBody {
+    system_prompt: String,
+    temperature: f32,
+    top_p: f32,
+    max_tokens: i64,
+    model_id: Option<String>,
+}
+
+async fn update_chat_settings(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<SettingsBody>,
+) -> impl IntoResponse {
+    match s.db.update_chat_session_settings(&id, &b.system_prompt, b.temperature, b.top_p, b.max_tokens, b.model_id.as_deref()) {
+        Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppendMessageBody {
+    role: String,
+    content: String,
+    reasoning: Option<String>,
+}
+
+async fn append_chat_message(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<AppendMessageBody>,
+) -> impl IntoResponse {
+    let mut msg = ipc::ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        session_id: id,
+        role: b.role,
+        content: b.content,
+        reasoning: b.reasoning,
+        ordinal: 0, // reassigned below to the true slot returned by the DB
+        created_at: chrono::Utc::now(),
+    };
+    match s.db.append_chat_message(&msg) {
+        Ok(ordinal) => { msg.ordinal = ordinal; ok_json(msg).into_response() }
         Err(e) => err_json(&e.to_string()).into_response(),
     }
 }

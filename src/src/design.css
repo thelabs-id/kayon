@@ -155,6 +155,22 @@
 /* chat */
 .chat{display:flex;height:100%;min-height:0}
 .chatmain{flex:1;display:flex;flex-direction:column;min-width:0}
+/* Chat session rail (RUN-5) */
+.chatsessions{width:236px;flex:none;border-right:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column}
+.chatsessions.hidden{display:none}
+.newchat{width:100%;justify-content:center;border:1px dashed var(--line2);background:transparent;color:var(--ink)}
+.newchat:hover{border-color:var(--iris);color:var(--iris)}
+.sessitem{position:relative;padding:9px 30px 9px 10px;border-radius:8px;cursor:pointer;margin-bottom:2px;border:1px solid transparent}
+.sessitem:hover{background:var(--panel2)}
+.sessitem.on{background:var(--panel2);border-color:var(--line2)}
+.sesstitle{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sessmeta{font-size:10px;color:var(--faint);margin-top:2px}
+.sessdel{position:absolute;top:8px;right:6px;width:20px;height:20px;border:0;background:transparent;color:var(--faint);cursor:pointer;border-radius:5px;opacity:0;font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center}
+.sessitem:hover .sessdel{opacity:1}
+.sessdel:hover{color:var(--ink);background:var(--line)}
+.sessdel.danger{opacity:1;width:auto;padding:0 6px;font-size:10px;font-family:'Geist Mono Variable',monospace;color:var(--danger)}
+.titleedit{font-weight:600;font-size:14px;background:var(--panel2);border:1px solid var(--line2);border-radius:5px;color:var(--ink);padding:2px 6px;outline:none}
+.livedot.off{background:var(--faint);animation:none;box-shadow:none}
 .chathead{flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
 .chatscroll{flex:1;overflow-y:auto;padding:26px 24px}
 .msg{max-width:720px;margin:0 auto 24px}

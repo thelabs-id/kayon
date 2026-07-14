@@ -173,6 +173,58 @@ pub struct Catalog {
     pub verified_signature: Option<String>,
 }
 
+// ---- Chat sessions (RUN-5): local-only conversation history ----
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: String,
+    pub session_id: String,
+    /// "user" | "assistant" | "system".
+    pub role: String,
+    pub content: String,
+    /// Reasoning segment, when the model emitted one (RUN-3).
+    pub reasoning: Option<String>,
+    /// Monotonic position within the session, so ordering never depends on timestamp ties.
+    pub ordinal: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    /// The model this session was last chatting with (informational; the active runtime decides).
+    pub model_id: Option<String>,
+    pub system_prompt: String,
+    pub temperature: f32,
+    pub top_p: f32,
+    pub max_tokens: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A session plus its messages, returned when reopening a chat.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSessionDetail {
+    #[serde(flatten)]
+    pub session: ChatSession,
+    pub messages: Vec<ChatMessage>,
+}
+
+/// Lightweight row for the session list (most-recent-first).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSessionSummary {
+    pub id: String,
+    pub title: String,
+    pub model_id: Option<String>,
+    pub message_count: i64,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelSource {

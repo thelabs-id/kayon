@@ -4,7 +4,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::ipc::{DownloadState, DownloadStatus, InstalledModel, ModelSource};
+use crate::ipc::{
+    ChatMessage, ChatSession, ChatSessionSummary, DownloadState, DownloadStatus, InstalledModel,
+    ModelSource,
+};
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -92,7 +95,29 @@ impl Database {
             CREATE TABLE IF NOT EXISTS catalog_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                model_id TEXT,
+                system_prompt TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                top_p REAL NOT NULL,
+                max_tokens INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                reasoning TEXT,
+                ordinal INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+                ON chat_messages (session_id, ordinal);",
         )?;
         // Migration for DBs created before the architecture column existed. Ignore the error if
         // the column is already present.
@@ -101,6 +126,137 @@ impl Database {
     }
 
     pub fn path(&self) -> &PathBuf { &self.path }
+
+    // ---- Chat sessions (RUN-5) ----
+
+    pub fn create_chat_session(&self, s: &ChatSession) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO chat_sessions
+             (id, title, model_id, system_prompt, temperature, top_p, max_tokens, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                s.id, s.title, s.model_id, s.system_prompt, s.temperature as f64, s.top_p as f64,
+                s.max_tokens, s.created_at.to_rfc3339(), s.updated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_chat_sessions(&self) -> Result<Vec<ChatSessionSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.title, s.model_id, s.updated_at,
+                    (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id)
+             FROM chat_sessions s ORDER BY s.updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ChatSessionSummary {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                model_id: r.get(2)?,
+                updated_at: parse_dt(r.get::<_, String>(3)?),
+                message_count: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn get_chat_session(&self, id: &str) -> Result<Option<ChatSession>> {
+        let conn = self.conn.lock().unwrap();
+        let s = conn.query_row(
+            "SELECT id, title, model_id, system_prompt, temperature, top_p, max_tokens, created_at, updated_at
+             FROM chat_sessions WHERE id = ?1",
+            params![id],
+            |r| Ok(ChatSession {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                model_id: r.get(2)?,
+                system_prompt: r.get(3)?,
+                temperature: r.get::<_, f64>(4)? as f32,
+                top_p: r.get::<_, f64>(5)? as f32,
+                max_tokens: r.get(6)?,
+                created_at: parse_dt(r.get::<_, String>(7)?),
+                updated_at: parse_dt(r.get::<_, String>(8)?),
+            }),
+        ).optional()?;
+        Ok(s)
+    }
+
+    pub fn get_chat_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, role, content, reasoning, ordinal, created_at
+             FROM chat_messages WHERE session_id = ?1 ORDER BY ordinal ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| {
+            Ok(ChatMessage {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                content: r.get(3)?,
+                reasoning: r.get(4)?,
+                ordinal: r.get(5)?,
+                created_at: parse_dt(r.get::<_, String>(6)?),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Append a message and bump the session's `updated_at`. The ordinal is assigned as the next
+    /// slot in the session, so ordering is stable regardless of clock resolution. Returns the
+    /// assigned ordinal so callers report the true position rather than a placeholder.
+    pub fn append_chat_message(&self, m: &ChatMessage) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let next: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chat_messages WHERE session_id = ?1",
+            params![m.session_id],
+            |r| r.get(0),
+        )?;
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, reasoning, ordinal, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![m.id, m.session_id, m.role, m.content, m.reasoning, next, m.created_at.to_rfc3339()],
+        )?;
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ?2 WHERE id = ?1",
+            params![m.session_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(next)
+    }
+
+    pub fn rename_chat_session(&self, id: &str, title: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE chat_sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, title, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Persist a session's per-conversation settings (system prompt + sampling params).
+    pub fn update_chat_session_settings(
+        &self, id: &str, system_prompt: &str, temperature: f32, top_p: f32, max_tokens: i64,
+        model_id: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE chat_sessions
+             SET system_prompt = ?2, temperature = ?3, top_p = ?4, max_tokens = ?5, model_id = ?6,
+                 updated_at = ?7
+             WHERE id = ?1",
+            params![id, system_prompt, temperature as f64, top_p as f64, max_tokens, model_id,
+                    Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_chat_session(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM chat_messages WHERE session_id = ?1", params![id])?;
+        conn.execute("DELETE FROM chat_sessions WHERE id = ?1", params![id])?;
+        Ok(())
+    }
 
     pub fn get_preference(&self, key: &str) -> Option<String> {
         let conn = self.conn.lock().unwrap();

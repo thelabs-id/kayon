@@ -240,6 +240,49 @@ export interface BenchmarkResult {
   runAt: string
 }
 
+// Chat sessions (RUN-5): local-only conversation history.
+export interface ChatMessage {
+  id: string
+  sessionId: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  reasoning?: string
+  ordinal: number
+  createdAt: string
+}
+
+export interface ChatSession {
+  id: string
+  title: string
+  modelId?: string
+  systemPrompt: string
+  temperature: number
+  topP: number
+  maxTokens: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatMessage[]
+}
+
+export interface ChatSessionSummary {
+  id: string
+  title: string
+  modelId?: string
+  messageCount: number
+  updatedAt: string
+}
+
+export interface ChatSettings {
+  systemPrompt: string
+  temperature: number
+  topP: number
+  maxTokens: number
+  modelId?: string
+}
+
 export const api = {
   hardware: () => apiFetch<ApiResponse<MachineProfile>>('/api/hardware'),
   catalog: () => apiFetch<ApiResponse<Catalog>>('/api/catalog'),
@@ -293,4 +336,18 @@ export const api = {
   telemetryStatus: () => apiFetch<ApiResponse<TelemetryStatus>>('/api/privacy/telemetry/status'),
   telemetryToggle: (enabled: boolean) => apiFetch<ApiResponse<TelemetryStatus>>('/api/privacy/telemetry/toggle', { method: 'POST', body: JSON.stringify({ enabled }) }),
   telemetryPreview: () => apiFetch<ApiResponse<{ endpoint: string; payload: string; byteSize: number }>>('/api/privacy/telemetry/preview'),
+
+  // Chat sessions (RUN-5)
+  chatSessions: () => apiFetch<ApiResponse<ChatSessionSummary[]>>('/api/chat/sessions'),
+  createChatSession: (body: Partial<ChatSettings> & { title?: string }) =>
+    apiFetch<ApiResponse<ChatSession>>('/api/chat/sessions', { method: 'POST', body: JSON.stringify(body) }),
+  chatSession: (id: string) => apiFetch<ApiResponse<ChatSessionDetail>>(`/api/chat/sessions/${id}`),
+  appendChatMessage: (id: string, body: { role: string; content: string; reasoning?: string }) =>
+    apiFetch<ApiResponse<ChatMessage>>(`/api/chat/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify(body) }),
+  renameChatSession: (id: string, title: string) =>
+    apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}/rename`, { method: 'POST', body: JSON.stringify({ title }) }),
+  updateChatSettings: (id: string, body: ChatSettings) =>
+    apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}/settings`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteChatSession: (id: string) =>
+    apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}`, { method: 'DELETE' }),
 }
