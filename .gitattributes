@@ -1,0 +1,9 @@
+# The catalog is ed25519-signed over its EXACT bytes. If git ever rewrites line endings
+# (autocrlf on Windows), the embedded bytes stop matching the signature and the bundled
+# catalog fails to verify (CAT-5). Pin these as binary so their bytes are identical on
+# every platform and after every git operation.
+src-tauri/catalog/catalog.json -text
+src-tauri/catalog/catalog.json.sig -text
+
+# ed25519 detached signatures anywhere are raw bytes — never touch them.
+*.sig -text
