@@ -1,32 +1,25 @@
-# React + TypeScript + Vite
+# Kayon UI (React + TypeScript + Vite)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The Kayon desktop app's frontend. It renders inside the Tauri WebView2 window and talks to the Rust
+core's local API on `127.0.0.1:9518`.
 
-Currently, two official plugins are available:
+- **Pages** (`src/pages/`): Dashboard, Model browser, Library, Chat, Privacy & network, Settings, Onboarding.
+- **API client** (`src/lib/api.ts`): typed wrappers over the core's HTTP endpoints (hardware, catalog +
+  live discovery status, fit verdicts, downloads + pause/resume/cancel, library, Ollama, runtime, chat
+  sessions, privacy).
+- **Design system** (`src/design.css`): replicates `design/apps/kayon-app.html`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Develop
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run build     # type-check (tsc -b) + production bundle → dist/ (served by the Rust core)
+npm run dev       # Vite dev server (used by `tauri dev`)
+npm run lint      # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The app is drivable in a plain browser for testing: run `cargo run --bin server` in `../src-tauri`
+(serves this UI + the API on `127.0.0.1:9518`), then open that URL.
+
+See the repository [`README.md`](../README.md) and `specs/REQUIREMENTS.md` (the single source of truth)
+for the full picture.

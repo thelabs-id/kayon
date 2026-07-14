@@ -4,9 +4,11 @@
 
 Kayon detects your hardware, tells you the *truth* about which models actually fit (a real
 memory model — weights + KV cache + compute buffers + display headroom, never `file_size < VRAM`),
-manages downloads with checksum verification, adopts your existing Ollama models in place via NTFS
-hard links (zero bytes re-downloaded), and runs everything locally through a managed llama.cpp
-runtime with no account, no cloud, and no telemetry unless you opt in.
+discovers an always-current catalog live from Hugging Face, and manages checksum-verified downloads
+with pause / resume / cancel controls. It adopts your existing Ollama models in place via NTFS hard
+links (zero bytes re-downloaded), and runs everything locally through a managed llama.cpp runtime —
+with local chat that saves your conversations as sessions, and no account, no cloud, and no
+telemetry unless you opt in.
 
 `specs/REQUIREMENTS.md` is the single source of truth; `specs/IMPLEMENTATION.md` is the build plan.
 
@@ -70,20 +72,22 @@ in the window — no browser required.
 
 ```bash
 cd src && npm install && npm run build          # build the UI once
-cd ../src-tauri
-node ../src/node_modules/@tauri-apps/cli/tauri.js build
-# → target/release/bundle/nsis/Kayon_1.0.0_x64-setup.exe
+cd ..
+src/node_modules/.bin/tauri build               # run from the repo root
+# → src-tauri/target/release/bundle/nsis/Kayon_<version>_x64-setup.exe  (version from tauri.conf.json)
 ```
 
-Run the installer, then launch **Kayon** from the Start menu. For development, `tauri dev` runs the
-window against the Vite dev server; `cargo run --bin kayon` runs the built app; `cargo run --bin
-server` runs just the API + UI on `127.0.0.1:9518` for browser-based testing.
+Run the installer, then launch **Kayon** from the Start menu. It installs per-machine to
+`Program Files\Kayon`. For development, `tauri dev` runs the window against the Vite dev server;
+`cargo run --bin kayon` runs the built app; `cargo run --bin server` runs just the API + UI on
+`127.0.0.1:9518` for browser-based testing.
 
-> **llama-server sidecar.** Dashboard, model browser, library, Ollama adoption, and the privacy
-> surface all work out of the box. *Chat/benchmark* need a llama.cpp `llama-server.exe`: set
-> `KAYON_LLAMA_SERVER` to its path, drop it in `src-tauri/binaries/`, or place it next to the
-> installed executable. The CUDA build is a large artifact procured separately (spec §8) and is not
-> committed to the repo.
+> **llama-server sidecar.** The **installer bundles** the llama.cpp `llama-server.exe` (CUDA) as a
+> Tauri resource, so chat and the benchmark work out of the box — no env var, no manual setup. When
+> **building from source**, the CUDA binary isn't committed (large artifact), so place it under
+> `src-tauri/binaries/llama/` before `tauri build`, or point `KAYON_LLAMA_SERVER` at it for
+> `cargo run`. The resolver checks the bundled resource path, the portable/dev paths, the env var,
+> and finally `PATH`.
 
 ## Prerequisites
 
