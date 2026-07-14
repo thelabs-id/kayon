@@ -28,24 +28,24 @@ export default function Library({ goBrowser, goPrivacy, onChange, goChat }: {
   // which is ~1s, so it must NOT run on the fast poll below.
   const load = async () => { await Promise.all([loadModels(), loadOllama()]) }
 
-  const activeCountRef = useRef(0)
-  const countActive = (ds: DownloadState[]) => ds.filter(x => x.status === 'active' || x.status === 'queued').length
+  // Ids of downloads already seen as completed, so a NEW completion triggers a library refresh.
+  // Tracking completions (not an active-count drop) reliably catches a paused download that is
+  // resumed and finishes between polls — its transient "active" state can be missed entirely.
+  const completedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     load()
-    // Seed the active count from the initial fetch too — otherwise a download that is already
-    // active on mount and finishes before the first tick would leave the ref at 0, the
-    // `activeNow < ref` completion check would never fire, and the finished model would not appear.
-    api.downloads().then(d => { if (d.ok && d.data) { setDownloads(d.data); activeCountRef.current = countActive(d.data) } })
+    // Seed from the initial fetch so pre-existing completions don't force a spurious first refresh.
+    api.downloads().then(d => { if (d.ok && d.data) { setDownloads(d.data); completedRef.current = new Set(d.data.filter(x => x.status === 'completed').map(x => x.id)) } })
     // Poll ONLY the cheap, fast-changing downloads (~ms) for live progress. Re-scanning the library
     // and the slow Ollama store every tick used to pile up multi-second requests and freeze the page.
-    // When a download finishes (active count drops), refresh the library so the new model appears.
     const iv = setInterval(async () => {
       const d = await api.downloads()
       if (!d.ok || !d.data) return
       setDownloads(d.data)
-      const activeNow = countActive(d.data)
-      if (activeNow < activeCountRef.current) loadModels()
-      activeCountRef.current = activeNow
+      const completedNow = d.data.filter(x => x.status === 'completed').map(x => x.id)
+      const newCompletion = completedNow.some(id => !completedRef.current.has(id))
+      completedRef.current = new Set(completedNow)
+      if (newCompletion) loadModels() // a download just finished — the new model is now in the library
     }, 1500)
     return () => clearInterval(iv)
   }, [])

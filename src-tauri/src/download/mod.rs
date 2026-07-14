@@ -318,6 +318,14 @@ impl DownloadManager {
             return Err(anyhow!("SHA-256 mismatch: expected {}, got {} (quarantined)", state.sha256_expected, computed));
         }
 
+        // A pause/cancel can land while the (blocking) hash runs — the bytes are all on disk but the
+        // user has said stop. Re-check before completing/installing so a paused transfer doesn't
+        // install anyway; the verified file stays on disk for a later resume (which will re-hash).
+        if let Some(reason) = self.stop_reason(download_id) {
+            db.set_download_status(download_id, &reason)?;
+            return Ok(());
+        }
+
         db.update_download_progress(download_id, total_received, &DownloadStatus::Completed, 0, None)?;
 
         // Enter the verified file into the library (DL-4, LIB-2). Idempotent on path.
