@@ -118,28 +118,37 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
   )
 }
 
+// Last-loaded browser data, kept at module scope so navigating away and back restores it instantly.
+// Without this, a remount resets catalog/verdicts/downloads to empty, and an in-flight download
+// briefly shows the Install button again — looking like it restarted from 0% even though the backend
+// download never stopped.
+const bcache: {
+  catalog: CatalogEntry[]; catMeta: { source: string; verified?: string }
+  verdicts: FitVerdict[]; downloads: DownloadState[]; ctx: number; kv: boolean
+} = { catalog: [], catMeta: { source: '' }, verdicts: [], downloads: [], ctx: 4096, kv: false }
+
 export default function Browser({ machine, goLibrary }: { machine: MachineProfile | null; goLibrary: () => void }) {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([])
-  const [catMeta, setCatMeta] = useState<{ source: string; verified?: string }>({ source: '' })
-  const [verdicts, setVerdicts] = useState<FitVerdict[]>([])
-  const [ctx, setCtx] = useState(4096)
-  const [kv, setKv] = useState(false)
+  const [catalog, setCatalog] = useState<CatalogEntry[]>(bcache.catalog)
+  const [catMeta, setCatMeta] = useState<{ source: string; verified?: string }>(bcache.catMeta)
+  const [verdicts, setVerdicts] = useState<FitVerdict[]>(bcache.verdicts)
+  const [ctx, setCtx] = useState(bcache.ctx)
+  const [kv, setKv] = useState(bcache.kv)
   const [openQ, setOpenQ] = useState<string | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(bcache.catalog.length === 0)
   const [discovering, setDiscovering] = useState(false)
-  const [downloads, setDownloads] = useState<DownloadState[]>([])
+  const [downloads, setDownloads] = useState<DownloadState[]>(bcache.downloads)
 
   const load = async () => {
-    setLoading(true)
+    if (catalog.length === 0) setLoading(true)
     const [c, v] = await Promise.all([api.catalog(), api.verdicts(ctx, kv ? 1 : 2)])
-    if (c.ok && c.data) { setCatalog(c.data.entries); setCatMeta({ source: c.data.source, verified: c.data.verifiedSignature }) }
-    if (v.ok && v.data) setVerdicts(v.data)
+    if (c.ok && c.data) { bcache.catalog = c.data.entries; bcache.catMeta = { source: c.data.source, verified: c.data.verifiedSignature }; setCatalog(bcache.catalog); setCatMeta(bcache.catMeta) }
+    if (v.ok && v.data) { bcache.verdicts = v.data; setVerdicts(v.data) }
     setLoading(false)
   }
-  useEffect(() => { load() }, [ctx, kv])
+  useEffect(() => { bcache.ctx = ctx; bcache.kv = kv; load() }, [ctx, kv])
 
-  const pollDownloads = async () => { const d = await api.downloads(); if (d.ok && d.data) setDownloads(d.data) }
+  const pollDownloads = async () => { const d = await api.downloads(); if (d.ok && d.data) { bcache.downloads = d.data; setDownloads(d.data) } }
   // Poll the background catalog-discovery flag (CAT-7) and any in-flight downloads, so the page can
   // show "finding the best models…" while discovery runs and live progress on each install.
   const wasDiscovering = useRef(false)
