@@ -15,6 +15,10 @@ pub struct DownloadManager {
     // every chunk and aborts, so a stopped transfer never later completes and installs the model.
     // The endpoint sets the row's status (Cancelled/Paused) — the loop only stops (DL).
     cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
+    // One async lock per download id, held by a drive task for its whole lifetime. A resume waits
+    // on it so it can't spawn a second writer while the paused task is still blocked in the stream
+    // (which would let two tasks append to the same file and corrupt the partial download).
+    drive_locks: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl DownloadManager {
@@ -23,11 +27,19 @@ impl DownloadManager {
             .user_agent("Kayon/0.1.0")
             .build()
             .expect("failed to build reqwest client");
-        Self { client, cancelled: std::sync::Mutex::new(std::collections::HashSet::new()) }
+        Self {
+            client,
+            cancelled: std::sync::Mutex::new(std::collections::HashSet::new()),
+            drive_locks: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
     }
 
     fn stop_requested(&self, id: &str) -> bool {
         self.cancelled.lock().unwrap().contains(id)
+    }
+
+    fn drive_lock(&self, id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.drive_locks.lock().unwrap().entry(id.to_string()).or_default().clone()
     }
 
     pub async fn start_download(
@@ -123,10 +135,13 @@ impl DownloadManager {
         download_id: &str,
         progress_tx: Option<mpsc::Sender<DownloadProgress>>,
     ) -> Result<()> {
-        // Any prior pause/cancel stop signal for this id is void now that we are (re)driving it —
-        // clear it so the streaming loop doesn't immediately abort. (A fresh start isn't in the set,
-        // so this is a harmless no-op there.) The immediate per-chunk stop means the previous task,
-        // if any, already returned long before a human can click Resume, so there is no double-drive.
+        // Serialize drives of this id: wait for any prior task (e.g. one paused but still blocked in
+        // the stream) to fully return before we touch the file, so two tasks never append at once.
+        let lock = self.drive_lock(download_id);
+        let _guard = lock.lock().await;
+
+        // Now that the previous task has exited, clear any pause/cancel stop signal so this task's
+        // streaming loop isn't immediately aborted. (A fresh start isn't in the set — harmless.)
         self.cancelled.lock().unwrap().remove(download_id);
 
         let state = db.get_download(download_id)?
