@@ -62,7 +62,7 @@ pub fn start_api_server() {
                 }) {
                     let (db, dl, id) = (db.clone(), dl.clone(), d.id.clone());
                     tokio::spawn(async move {
-                        dl.drive(&db, &id).await;
+                        dl.drive(&db, &id, false).await; // DL-1 restart, not a user resume
                     });
                 }
             }
@@ -484,7 +484,7 @@ async fn start_download(
                 let db = s.db.clone();
                 let dl = s.dl.clone();
                 tokio::spawn(async move {
-                    dl.drive(&db, &id).await;
+                    dl.drive(&db, &id, false).await; // fresh start, not a resume
                 });
             }
             ok_json(state).into_response()
@@ -517,7 +517,7 @@ async fn resume_download(State(s): State<AppState>, Path(id): Path<String>) -> i
         Ok(Some(d)) if matches!(d.status, DownloadStatus::Paused | DownloadStatus::Failed) => {
             let _ = s.db.set_download_status(&id, &DownloadStatus::Active);
             let (db, dl, did) = (s.db.clone(), s.dl.clone(), id.clone());
-            tokio::spawn(async move { dl.drive(&db, &did).await; });
+            tokio::spawn(async move { dl.drive(&db, &did, true).await; }); // explicit user resume
             ok_json(true).into_response()
         }
         Ok(Some(_)) => err_json("download is not paused").into_response(),

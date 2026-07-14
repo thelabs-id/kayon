@@ -119,8 +119,10 @@ impl DownloadManager {
     /// Drive a download to completion, ensuring the row never gets stuck `Active` on an
     /// unexpected error (network drop, disk error). On failure, flip a still-active row to failed
     /// so a later Start re-spawns it, without clobbering a cancelled/quarantined status.
-    pub async fn drive(&self, db: &Arc<Database>, download_id: &str) {
-        if let Err(e) = self.resume_download(db, download_id, None).await {
+    /// `is_resume` is true only for an explicit user Resume — it authorises clearing a Paused stop.
+    /// A fresh start / DL-1 restart passes false, so a pause requested during the start window wins.
+    pub async fn drive(&self, db: &Arc<Database>, download_id: &str, is_resume: bool) {
+        if let Err(e) = self.resume_download(db, download_id, None, is_resume).await {
             if let Ok(Some(d)) = db.get_download(download_id) {
                 if matches!(d.status, DownloadStatus::Active | DownloadStatus::Queued) {
                     let _ = db.set_download_error(download_id, &e.to_string());
@@ -135,28 +137,27 @@ impl DownloadManager {
         db: &Arc<Database>,
         download_id: &str,
         progress_tx: Option<mpsc::Sender<DownloadProgress>>,
+        is_resume: bool,
     ) -> Result<()> {
         // Serialize drives of this id: wait for any prior task (e.g. one paused but still blocked in
         // the stream) to fully return before we touch the file, so two tasks never append at once.
         let lock = self.drive_lock(download_id);
         let _guard = lock.lock().await;
 
-        // Atomically decide whether to proceed: if the user cancelled while we waited on the lock,
-        // honour it and abort instead of resurrecting the transfer. Otherwise clear the (paused)
-        // stop signal so this task's loop isn't immediately aborted.
-        let cancelled_while_waiting = {
+        // Atomically decide whether to proceed. A Cancelled stop always wins (abort). A Paused stop
+        // wins too UNLESS this is an explicit resume — so a pause requested during the start/queued
+        // window isn't silently cleared by the fresh-start drive. Otherwise clear the stop and run.
+        let abort_with: Option<DownloadStatus> = {
             let mut stop = self.stop.lock().unwrap();
-            if matches!(stop.get(download_id), Some(DownloadStatus::Cancelled)) {
-                true
-            } else {
-                stop.remove(download_id);
-                false
+            match stop.get(download_id).cloned() {
+                Some(DownloadStatus::Cancelled) => Some(DownloadStatus::Cancelled),
+                Some(DownloadStatus::Paused) if !is_resume => Some(DownloadStatus::Paused),
+                _ => { stop.remove(download_id); None }
             }
         };
-        if cancelled_while_waiting {
-            // Re-assert Cancelled: the resume endpoint may have flipped the row to Active just before
-            // the cancel landed, so make the persisted status match the user's final intent.
-            db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+        if let Some(status) = abort_with {
+            // Re-assert the intended status (a racing endpoint may have flipped the row to Active).
+            db.set_download_status(download_id, &status)?;
             return Ok(());
         }
 
@@ -341,9 +342,10 @@ impl DownloadManager {
     }
 
     pub async fn cancel_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
-        // Record the stop reason (the loop re-asserts it) and mark the row cancelled. Cancel wins
-        // over a concurrent pause/resume: the resume path bails when it sees a Cancelled reason.
-        self.stop.lock().unwrap().insert(download_id.to_string(), DownloadStatus::Cancelled);
+        // Cancel always wins. Set the map + DB status under the same lock so they stay consistent
+        // even if a pause races (a later pause is refused while Cancelled is present — see below).
+        let mut stop = self.stop.lock().unwrap();
+        stop.insert(download_id.to_string(), DownloadStatus::Cancelled);
         db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
         Ok(())
     }
@@ -352,7 +354,12 @@ impl DownloadManager {
     /// row Paused. The partial bytes stay on disk (writes are unbuffered), so `resume_download`
     /// continues from the file length via a Range request — same mechanism as the DL-1 restart.
     pub async fn pause_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
-        self.stop.lock().unwrap().insert(download_id.to_string(), DownloadStatus::Paused);
+        let mut stop = self.stop.lock().unwrap();
+        // Never override a Cancelled reason — cancellation must win over a racing pause.
+        if matches!(stop.get(download_id), Some(DownloadStatus::Cancelled)) {
+            return Ok(());
+        }
+        stop.insert(download_id.to_string(), DownloadStatus::Paused);
         db.set_download_status(download_id, &DownloadStatus::Paused)?;
         Ok(())
     }
