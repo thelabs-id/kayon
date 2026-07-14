@@ -17,6 +17,9 @@ function rel(iso: string): string {
 }
 
 const DEFAULT_SYS = 'You are a precise coding assistant. Prefer minimal diffs and explain tradeoffs in one sentence.'
+const DEFAULT_TEMP = 0.7
+const DEFAULT_TOP_P = 0.95
+const DEFAULT_MAX_TOK = 2048
 
 export default function Chat({ machine, runtime }: { machine: MachineProfile | null; runtime: RuntimeStatus | null }) {
   const [msgs, setMsgs] = useState<Msg[]>([])
@@ -25,9 +28,9 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const [sideOpen, setSideOpen] = useState(false)
   const [railOpen, setRailOpen] = useState(true)
   const [sys, setSys] = useState(DEFAULT_SYS)
-  const [temp, setTemp] = useState(0.7)
-  const [topP, setTopP] = useState(0.95)
-  const [maxTok, setMaxTok] = useState(2048)
+  const [temp, setTemp] = useState(DEFAULT_TEMP)
+  const [topP, setTopP] = useState(DEFAULT_TOP_P)
+  const [maxTok, setMaxTok] = useState(DEFAULT_MAX_TOK)
 
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -63,7 +66,9 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     if (busy) return // don't reset the view out from under an in-flight stream
     flushSettings() // save the outgoing session's settings before clearing them
     setActiveId(null); setActiveTitle('New chat'); setMsgs([]); setInput('')
-    setSys(DEFAULT_SYS); setEditingTitle(false)
+    // Reset ALL per-session settings so a fresh chat never inherits the last session's params.
+    setSys(DEFAULT_SYS); setTemp(DEFAULT_TEMP); setTopP(DEFAULT_TOP_P); setMaxTok(DEFAULT_MAX_TOK)
+    setEditingTitle(false)
   }
 
   const openSession = async (id: string) => {
