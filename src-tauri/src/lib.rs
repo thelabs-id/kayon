@@ -94,6 +94,7 @@ pub fn start_api_server() {
         .route("/api/hardware/stream", get(hardware_stream))
         .route("/api/catalog", get(get_catalog))
         .route("/api/catalog/refresh", post(refresh_catalog))
+        .route("/api/catalog/status", get(catalog_status))
         .route("/api/fit/verdicts", get(all_verdicts))
         .route("/api/fit/verdict/{model_id}/{quant_label}", get(verdict))
         .route("/api/library", get(library_list))
@@ -261,10 +262,34 @@ async fn get_catalog(State(_s): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// Whether a catalog discovery pass is currently running, so the UI can show a "finding the best
+/// models for your GPU" indicator (CAT-7 discovery is a background process on launch + on refresh).
+static DISCOVERING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets DISCOVERING for the lifetime of a discovery pass and clears it on drop (even on error/early
+/// return), so the flag can never get stuck on.
+struct DiscoveryGuard;
+impl DiscoveryGuard {
+    fn new() -> Self { DISCOVERING.store(true, std::sync::atomic::Ordering::SeqCst); Self }
+}
+impl Drop for DiscoveryGuard {
+    fn drop(&mut self) { DISCOVERING.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
+async fn catalog_status() -> impl IntoResponse {
+    let cat = catalog::get_active_catalog().ok();
+    ok_json(serde_json::json!({
+        "discovering": DISCOVERING.load(std::sync::atomic::Ordering::SeqCst),
+        "source": cat.as_ref().map(|c| c.source.clone()),
+        "revision": cat.as_ref().map(|c| c.revision),
+    })).into_response()
+}
+
 /// Run one live discovery pass against Hugging Face and cache the result (CAT-7). The currently
 /// active catalog seeds the arch cache so already-known models don't re-fetch their headers. Every
 /// HF request is logged at egress (PRIV-5). Returns the number of models discovered.
 async fn run_discovery(db: &Arc<db::Database>) -> anyhow::Result<usize> {
+    let _guard = DiscoveryGuard::new();
     let seed = catalog::get_active_catalog().unwrap_or_else(|_| catalog::empty_catalog());
     // Monotonic revision so a fresh discovery supersedes the cache/bundled seed (get_active_catalog
     // guards on revision). Unix seconds is monotonic and dwarfs the small bundled revisions.

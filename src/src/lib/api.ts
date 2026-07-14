@@ -287,6 +287,7 @@ export const api = {
   hardware: () => apiFetch<ApiResponse<MachineProfile>>('/api/hardware'),
   catalog: () => apiFetch<ApiResponse<Catalog>>('/api/catalog'),
   catalogRefresh: () => apiFetch<ApiResponse<Catalog>>('/api/catalog/refresh', { method: 'POST' }),
+  catalogStatus: () => apiFetch<ApiResponse<{ discovering: boolean; source?: string; revision?: number }>>('/api/catalog/status'),
   verdicts: (ctx?: number, kvTypeBytes?: number) => {
     const p = new URLSearchParams()
     if (ctx) p.set('ctx', String(ctx))

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { api, type CatalogEntry, type FitVerdict, type MachineProfile, type Quant } from '../lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { api, type CatalogEntry, type DownloadState, type FitVerdict, type MachineProfile, type Quant } from '../lib/api'
 import { VerdictChip } from '../components/icons'
 
 const CTX = [2048, 4096, 8192, 16384, 32768]
@@ -7,10 +7,31 @@ const fmtB = (b: number) => b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(0)} MB` :
 const g = (b: number) => (b / 1024 ** 3).toFixed(1)
 const order: Record<string, number> = { FITS_FULLY: 0, FITS_TIGHT: 1, GPU_CPU_SPLIT: 2, CPU_ONLY: 3, UNVERIFIED_ARCH: 4, EXCEEDS_MACHINE: 5 }
 const isPinned = (s: string) => /^[0-9a-f]{64}$/i.test((s || '').trim())
+const activeStatus = (s: string) => s === 'active' || s === 'queued'
+const dlPct = (d: DownloadState) => d.totalBytes > 0 ? Math.min(100, Math.floor((d.receivedBytes / d.totalBytes) * 100)) : 0
 
-function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy }: {
+// Inline download state for a model|quant — a live bar while downloading (so it never looks stuck on
+// "Starting"), a library link when done, or the failure reason.
+function DlProgress({ d, goLibrary }: { d: DownloadState; goLibrary: () => void }) {
+  if (d.status === 'completed') return <button className="btn btn-line btn-sm" onClick={goLibrary}>In library ✓</button>
+  if (!activeStatus(d.status)) return <span className="mono" style={{ fontSize: 12, color: d.status === 'cancelled' ? 'var(--faint)' : 'var(--danger)' }}>{d.status === 'cancelled' ? 'cancelled' : (d.error || 'failed')}</span>
+  const pct = dlPct(d)
+  return (
+    <div className="dlprog">
+      <div className="dlbar mini"><div className="dlfill" style={{ width: pct + '%' }} /></div>
+      <div className="mono faint" style={{ fontSize: 11 }}>
+        {d.status === 'queued' || d.totalBytes === 0
+          ? 'Starting…'
+          : `${pct}% · ${fmtB(d.receivedBytes)}/${fmtB(d.totalBytes)} · ${(d.throughputBps / 1024 ** 2).toFixed(1)} MB/s${d.etaSeconds != null ? ` · ${d.etaSeconds}s` : ''}`}
+      </div>
+    </div>
+  )
+}
+
+function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy, dl, goLibrary }: {
   q: Quant; v?: FitVerdict; ctxLabel: string; vramAvail: string
   open: boolean; onToggle: () => void; onDownload: () => void; busy: boolean
+  dl?: DownloadState; goLibrary: () => void
 }) {
   const bd = v?.breakdown
   const pinned = isPinned(q.sha256)
@@ -36,11 +57,13 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy 
             weights {g(bd.weightsBytes)} + KV@{ctxLabel} {g(bd.kvBytes)} + buffers {g(bd.computeBufferBytes + bd.cudaOverheadBytes)} = <b style={{ color: 'var(--ink)' }}>{g(bd.totalNeedBytes)} GB</b> vs {vramAvail} GB available
           </> : (v?.explainability ?? '')}
           <div style={{ marginTop: 10 }}>
-            {v?.verdict === 'EXCEEDS_MACHINE'
-              ? <span className="faint">Won't fit on this machine.</span>
-              : !pinned
-                ? <span className="faint" title="Checksum not yet pinned by the catalog generator (CAT-6).">Checksum pending — not yet downloadable.</span>
-                : <button className="btn btn-iris btn-sm" disabled={busy} onClick={(e) => { e.stopPropagation(); onDownload() }}>{busy ? 'Starting…' : `Download · ${fmtB(q.bytes)}`}</button>}
+            {dl
+              ? <DlProgress d={dl} goLibrary={goLibrary} />
+              : v?.verdict === 'EXCEEDS_MACHINE'
+                ? <span className="faint">Won't fit on this machine.</span>
+                : !pinned
+                  ? <span className="faint" title="Checksum not yet pinned by the catalog generator (CAT-6).">Checksum pending — not yet downloadable.</span>
+                  : <button className="btn btn-iris btn-sm" disabled={busy} onClick={(e) => { e.stopPropagation(); onDownload() }}>{busy ? 'Starting…' : `Download · ${fmtB(q.bytes)}`}</button>}
           </div>
         </div>
       )}
@@ -48,9 +71,10 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy 
   )
 }
 
-function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey }: {
+function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey, dlMap, goLibrary }: {
   entry: CatalogEntry; vmap: Map<string, FitVerdict>; ctxLabel: string; vramAvail: string; lead?: boolean
   openQ: string | null; setOpenQ: (k: string | null) => void; download: (e: CatalogEntry, q: Quant) => void; busyKey: string | null
+  dlMap: Map<string, DownloadState>; goLibrary: () => void
 }) {
   const caps = [entry.capabilities.tools && 'tools', entry.capabilities.reasoning && 'reasoning', entry.capabilities.vision && 'vision'].filter(Boolean) as string[]
   // Best downloadable quant = pinned checksum + a runnable verdict, ranked by fit then size.
@@ -61,6 +85,9 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
     .sort((a, b) => (order[a.v!.verdict] ?? 9) - (order[b.v!.verdict] ?? 9))[0]?.q
   const anyPinned = entry.quants.some(q => isPinned(q.sha256))
   const busyThis = entry.quants.some(q => busyKey === `${entry.id}|${q.label}`)
+  // A download in flight (or just finished) for any of this model's quants — drives the inline
+  // progress shown in place of the Install button.
+  const entryDl = entry.quants.map(q => dlMap.get(`${entry.id}|${q.label}`)).find(Boolean)
   return (
     <div className={`mcard ${lead ? 'lead' : ''}`}>
       {lead && <div className="leadbanner"><svg className="kmk" viewBox="0 0 64 64" width="15" height="15"><path className="ko" d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z" style={{ stroke: 'var(--iris)' }} /></svg><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best pick for your machine</span><span className="muted">— the most capable model that fits, computed from real free VRAM.</span></div>}
@@ -73,7 +100,9 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
             {caps.map(c => <span key={c} className="tag">{c}</span>)}
           </div>
         </div>
-        {dlQuant
+        {entryDl
+          ? <DlProgress d={entryDl} goLibrary={goLibrary} />
+          : dlQuant
           ? <button className={`btn ${lead ? 'btn-iris' : 'btn-line'} btn-sm`} disabled={busyThis} onClick={() => download(entry, dlQuant)}>{busyThis ? 'Starting…' : `Install · ${dlQuant.label} · ${fmtB(dlQuant.bytes)}`}</button>
           : anyPinned
             ? <span className="mono faint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>won't fit</span>
@@ -82,7 +111,7 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
       <div className="qtable">
         {entry.quants.map(q => {
           const key = `${entry.id}|${q.label}`
-          return <QuantRow key={key} q={q} v={vmap.get(key)} ctxLabel={ctxLabel} vramAvail={vramAvail} open={openQ === key} onToggle={() => setOpenQ(openQ === key ? null : key)} onDownload={() => download(entry, q)} busy={busyKey === key} />
+          return <QuantRow key={key} q={q} v={vmap.get(key)} ctxLabel={ctxLabel} vramAvail={vramAvail} open={openQ === key} onToggle={() => setOpenQ(openQ === key ? null : key)} onDownload={() => download(entry, q)} busy={busyKey === key} dl={dlMap.get(key)} goLibrary={goLibrary} />
         })}
       </div>
     </div>
@@ -97,13 +126,35 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
   const [kv, setKv] = useState(false)
   const [openQ, setOpenQ] = useState<string | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [discovering, setDiscovering] = useState(false)
+  const [downloads, setDownloads] = useState<DownloadState[]>([])
 
   const load = async () => {
+    setLoading(true)
     const [c, v] = await Promise.all([api.catalog(), api.verdicts(ctx, kv ? 1 : 2)])
     if (c.ok && c.data) { setCatalog(c.data.entries); setCatMeta({ source: c.data.source, verified: c.data.verifiedSignature }) }
     if (v.ok && v.data) setVerdicts(v.data)
+    setLoading(false)
   }
   useEffect(() => { load() }, [ctx, kv])
+
+  const pollDownloads = async () => { const d = await api.downloads(); if (d.ok && d.data) setDownloads(d.data) }
+  // Poll the background catalog-discovery flag (CAT-7) and any in-flight downloads, so the page can
+  // show "finding the best models…" while discovery runs and live progress on each install.
+  const wasDiscovering = useRef(false)
+  useEffect(() => {
+    pollDownloads()
+    const iv = setInterval(async () => {
+      const [s] = await Promise.all([api.catalogStatus(), pollDownloads()])
+      const now = !!(s.ok && s.data?.discovering)
+      setDiscovering(now)
+      // When a discovery pass finishes, reload the catalog + verdicts to reveal the fresh models.
+      if (wasDiscovering.current && !now) load()
+      wasDiscovering.current = now
+    }, 1200)
+    return () => clearInterval(iv)
+  }, [])
 
   const vmap = useMemo(() => { const m = new Map<string, FitVerdict>(); for (const v of verdicts) m.set(`${v.modelId}|${v.quantLabel}`, v); return m }, [verdicts])
 
@@ -116,13 +167,24 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
   const vramAvail = gpu ? g(Math.max(0, gpu.telemetry.vramFreeBytes - Math.max(1024 ** 3, gpu.totalVramBytes * 0.1))) : '0'
   const ctxLabel = ctx >= 1024 ? `${(ctx / 1024).toFixed(0)}k` : `${ctx}`
 
+  // Active/queued/completed download per model|quant, so cards can render inline progress instead of
+  // navigating away to the Library (which made a running download look "stuck on Starting").
+  const dlMap = useMemo(() => {
+    const m = new Map<string, DownloadState>()
+    // A model|quant can have several rows over time (e.g. a cancelled attempt + a fresh one). The
+    // API returns them newest-first, so keep the first (most recent) per key — otherwise a stale
+    // cancelled/failed row would shadow the live download and the card would look wrong.
+    for (const d of downloads) { const k = `${d.modelId}|${d.quantLabel}`; if (!m.has(k)) m.set(k, d) }
+    return m
+  }, [downloads])
+
   const download = async (entry: CatalogEntry, q: Quant) => {
     const key = `${entry.id}|${q.label}`
     setBusyKey(key)
     const r = await api.startDownload({ modelId: entry.id, quantLabel: q.label })
     setBusyKey(null)
-    if (!r.ok) alert('Download refused: ' + (r.error || 'unknown'))
-    else goLibrary()
+    if (!r.ok) { alert('Download refused: ' + (r.error || 'unknown')); return }
+    pollDownloads() // surface progress inline immediately; the poll keeps it live
   }
 
   return (
@@ -149,9 +211,18 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
         <span className="mono faint" style={{ fontSize: 11 }}>VRAM_avail {vramAvail} GB · headroom 1.0 GB</span>
       </div>
 
-      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} />}
+      {(discovering || (loading && catalog.length === 0)) && (
+        <div className="findbar">
+          <span className="findspin" />
+          <span>{discovering
+            ? 'Finding the best models for your GPU — discovering from Hugging Face…'
+            : 'Computing fit for your GPU…'}</span>
+        </div>
+      )}
+
+      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} goLibrary={goLibrary} />}
       <div style={{ marginTop: 22 }}>
-        {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} />)}
+        {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} goLibrary={goLibrary} />)}
       </div>
     </div>
   )
