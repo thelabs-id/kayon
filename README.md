@@ -177,6 +177,12 @@ These are documented tradeoffs, not silent divergences:
   line, parameters panel) and streams over the OpenAI-compatible endpoint. assistant-ui is a React
   library and runs in the Tauri WebView2 window unchanged; wiring it in for its message-branching /
   tool-calling primitives under this same visual skin is a UI-layer follow-up.
+- **Chat sessions persist locally (RUN-5).** Conversations are stored in local SQLite as named
+  sessions — start a new chat or reopen any prior one and continue it (the stored transcript is
+  replayed as the model's context). Each session keeps its own system prompt + sampling params;
+  sessions list most-recent-first, auto-title from the first message (renamable), and delete with a
+  two-step confirm. History is local-only (no cloud, no telemetry). Summarized long-term memory and
+  cross-chat recall are a documented post-v1 extension, not in this build.
 - **The catalog is discovered live from Hugging Face at runtime, fully pinned** — every quant's real
   SHA-256 + byte size come from HF's LFS metadata, so every entry downloads and checksum-verifies end
   to end (no placeholder checksums). The tradeoff vs. CAT-6's human-PR-review gate *and* the CAT-5
