@@ -712,7 +712,12 @@ async fn benchmark(
     };
 
     // HW-5 / OD-7: fixed prompt + fixed generation length, declared context, warm run only.
-    const PROMPT: &str = "Explain what a GPU is in two sentences.";
+    // A neutral *continuation* seed (not an instruction) is used on purpose: an instruction prompt
+    // makes an instruct model greedily emit an end-of-generation token immediately (and `ignore_eos`
+    // only skips the EOS token, not every EOG token), which would collapse the generation to ~1
+    // token. This seed reliably generates the full N_PREDICT tokens across models, so the throughput
+    // number is real. It also carries enough tokens for a stable prompt-eval measurement.
+    const PROMPT: &str = "Once upon a time in a small village near the mountains there lived";
     const N_PREDICT: u32 = 128;
     let url = format!("http://127.0.0.1:{}/completion", port);
     let client = reqwest::Client::new();
@@ -726,6 +731,9 @@ async fn benchmark(
                 "n_predict": if warm_up { 8 } else { N_PREDICT },
                 "temperature": 0.0,
                 "cache_prompt": false,
+                // A throughput benchmark must measure a full generation. Without this, a model that
+                // emits EOS after ~1 token (predicted_ms ≈ 0) yields a nonsensical rate.
+                "ignore_eos": true,
             });
             client.post(&url).json(&body).send().await.ok()?.json::<serde_json::Value>().await.ok()
         }
@@ -740,12 +748,20 @@ async fn benchmark(
     };
     let duration_ms = started.elapsed().as_millis() as u64;
 
-    // llama-server returns a `timings` object with prompt/predicted tokens and per-second rates.
+    // Compute rates ourselves from token counts + milliseconds rather than trusting llama-server's
+    // `*_per_second`, which reports a nonsensical ~1e6 when a phase takes ~0ms (e.g. a 1-token EOS).
+    // The `ignore_eos` above forces a full run so this is real; the ms floor keeps us honest if a
+    // phase still comes back near-zero — we report 0 (unavailable) rather than a fabricated number.
     let t = &resp["timings"];
-    let prompt_eval_tps = t["prompt_per_second"].as_f64().unwrap_or(0.0) as f32;
-    let gen_tps = t["predicted_per_second"].as_f64().unwrap_or(0.0) as f32;
+    let prompt_ms = t["prompt_ms"].as_f64().unwrap_or(0.0);
+    let predicted_ms = t["predicted_ms"].as_f64().unwrap_or(0.0);
     let prompt_tokens = t["prompt_n"].as_u64().unwrap_or(0) as u32;
-    let gen_tokens = t["predicted_n"].as_u64().unwrap_or(N_PREDICT as u64) as u32;
+    let gen_tokens = t["predicted_n"].as_u64().unwrap_or(0) as u32;
+    // Require a handful of tokens and a non-trivial elapsed time before reporting a rate, so a
+    // model that stops early can't yield a noisy or fabricated tokens/sec — report 0 (unavailable).
+    let rate = |toks: u32, ms: f64, min: u32| if ms >= 1.0 && toks >= min { (1000.0 * toks as f64 / ms) as f32 } else { 0.0 };
+    let prompt_eval_tps = rate(prompt_tokens, prompt_ms, 2);
+    let gen_tps = rate(gen_tokens, predicted_ms, 8);
 
     let result = BenchmarkResult {
         model_id: req.model_id.clone(),
