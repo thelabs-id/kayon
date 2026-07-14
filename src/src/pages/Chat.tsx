@@ -51,7 +51,16 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     const s = settingsRef.current
     if (s.activeId) api.updateChatSettings(s.activeId, { systemPrompt: s.sys, temperature: s.temp, topP: s.topP, maxTokens: s.maxTok, modelId: s.modelId })
   }
-  useEffect(() => () => flushSettings(), []) // flush on unmount (navigating away / closing the page)
+  // Persist settings shortly after each edit (debounced), so an edit that is never followed by a
+  // send is still saved well before the window/process tears down — teardown can cancel an
+  // in-flight fetch, so we must not rely only on the unmount flush. SQLite is local, so 400ms is
+  // ample. The unmount + transition flushes remain as immediate backstops.
+  useEffect(() => {
+    if (!activeId) return
+    const t = setTimeout(flushSettings, 400)
+    return () => clearTimeout(t)
+  }, [sys, temp, topP, maxTok, activeId])
+  useEffect(() => () => flushSettings(), []) // final backstop on unmount (navigating away / closing)
 
   const loadSessions = async () => {
     const r = await api.chatSessions()
