@@ -138,9 +138,9 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
 // briefly shows the Install button again — looking like it restarted from 0% even though the backend
 // download never stopped.
 const bcache: {
-  catalog: CatalogEntry[]; catMeta: { source: string; verified?: string }
+  catalog: CatalogEntry[]; catMeta: { source: string; verified?: string }; revision: number
   verdicts: FitVerdict[]; downloads: DownloadState[]; installed: Set<string>; ctx: number; kv: boolean
-} = { catalog: [], catMeta: { source: '' }, verdicts: [], downloads: [], installed: new Set(), ctx: 4096, kv: false }
+} = { catalog: [], catMeta: { source: '' }, revision: 0, verdicts: [], downloads: [], installed: new Set(), ctx: 4096, kv: false }
 
 export default function Browser({ machine, goLibrary }: { machine: MachineProfile | null; goLibrary: () => void }) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>(bcache.catalog)
@@ -156,10 +156,11 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
   const [installed, setInstalled] = useState<Set<string>>(bcache.installed)
   const [reloadNonce, setReloadNonce] = useState(0)
 
+  const loadedRevRef = useRef(bcache.revision)
   const load = async () => {
     if (catalog.length === 0) setLoading(true)
     const [c, v] = await Promise.all([api.catalog(), api.verdicts(ctx, kv ? 1 : 2)])
-    if (c.ok && c.data) { bcache.catalog = c.data.entries; bcache.catMeta = { source: c.data.source, verified: c.data.verifiedSignature }; setCatalog(bcache.catalog); setCatMeta(bcache.catMeta) }
+    if (c.ok && c.data) { bcache.catalog = c.data.entries; bcache.catMeta = { source: c.data.source, verified: c.data.verifiedSignature }; bcache.revision = c.data.revision; loadedRevRef.current = c.data.revision; setCatalog(bcache.catalog); setCatMeta(bcache.catMeta) }
     if (v.ok && v.data) { bcache.verdicts = v.data; setVerdicts(v.data) }
     setLoading(false)
   }
@@ -175,20 +176,24 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
     const l = await api.library()
     if (l.ok && l.data) { const s = new Set(l.data.map(m => `${m.modelId}|${m.quantLabel}`)); bcache.installed = s; setInstalled(s) }
   }
-  // Poll the background catalog-discovery flag (CAT-7), in-flight downloads, and the library, so the
-  // page can show "finding the best models…" while discovery runs, live progress on each install,
-  // and an accurate installed state.
-  const wasDiscovering = useRef(false)
+  // Poll the background catalog-discovery status (CAT-7), in-flight downloads, and the library, so
+  // the page can show "finding the best models…" while discovery runs, live progress on each
+  // install, and an accurate installed state.
+  const pollStatus = async () => {
+    const s = await api.catalogStatus()
+    if (!s.ok || !s.data) return
+    setDiscovering(!!s.data.discovering)
+    // Reload catalog + verdicts (with the CURRENT fit knobs) whenever a newer revision has landed.
+    // Comparing the revision — rather than watching the discovering flag go true→false — is robust
+    // to a discovery pass that starts and finishes between (or before) our poll ticks.
+    if (s.data.revision != null && s.data.revision > loadedRevRef.current) {
+      loadedRevRef.current = s.data.revision // optimistic: avoid re-bumping before load() catches up
+      setReloadNonce(n => n + 1)
+    }
+  }
   useEffect(() => {
-    pollDownloads(); pollLibrary()
-    const iv = setInterval(async () => {
-      const [s] = await Promise.all([api.catalogStatus(), pollDownloads(), pollLibrary()])
-      const now = !!(s.ok && s.data?.discovering)
-      setDiscovering(now)
-      // When a discovery pass finishes, reload catalog + verdicts (with the current fit knobs).
-      if (wasDiscovering.current && !now) setReloadNonce(n => n + 1)
-      wasDiscovering.current = now
-    }, 1200)
+    pollDownloads(); pollLibrary(); pollStatus() // run once immediately, then on an interval
+    const iv = setInterval(() => { pollStatus(); pollDownloads(); pollLibrary() }, 1200)
     return () => clearInterval(iv)
   }, [])
 
