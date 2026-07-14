@@ -7,31 +7,42 @@ const fmtB = (b: number) => b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(0)} MB` :
 const g = (b: number) => (b / 1024 ** 3).toFixed(1)
 const order: Record<string, number> = { FITS_FULLY: 0, FITS_TIGHT: 1, GPU_CPU_SPLIT: 2, CPU_ONLY: 3, UNVERIFIED_ARCH: 4, EXCEEDS_MACHINE: 5 }
 const isPinned = (s: string) => /^[0-9a-f]{64}$/i.test((s || '').trim())
-const activeStatus = (s: string) => s === 'active' || s === 'queued'
 const dlPct = (d: DownloadState) => d.totalBytes > 0 ? Math.min(100, Math.floor((d.receivedBytes / d.totalBytes) * 100)) : 0
 
-// Inline download state for a model|quant — a live bar while downloading (so it never looks stuck on
-// "Starting"), a library link when done, or the failure reason.
-function DlProgress({ d, goLibrary }: { d: DownloadState; goLibrary: () => void }) {
+interface DlActions { onPause: (id: string) => void; onResume: (id: string) => void; onCancel: (id: string) => void; goLibrary: () => void }
+
+// Inline download state for a model|quant — a live bar with pause/resume/cancel while in flight (so
+// it never looks stuck on "Starting"), a library link when done, or the failure reason.
+function DlProgress({ d, onPause, onResume, onCancel, goLibrary }: { d: DownloadState } & DlActions) {
   if (d.status === 'completed') return <button className="btn btn-line btn-sm" onClick={goLibrary}>In library ✓</button>
-  if (!activeStatus(d.status)) return <span className="mono" style={{ fontSize: 12, color: d.status === 'cancelled' ? 'var(--faint)' : 'var(--danger)' }}>{d.status === 'cancelled' ? 'cancelled' : (d.error || 'failed')}</span>
+  if (d.status === 'cancelled' || d.status === 'failed' || d.status === 'quarantined')
+    return <span className="mono" style={{ fontSize: 12, color: d.status === 'cancelled' ? 'var(--faint)' : 'var(--danger)' }}>{d.status === 'cancelled' ? 'cancelled' : (d.status === 'quarantined' ? 'checksum failed' : (d.error || 'failed'))}</span>
   const pct = dlPct(d)
+  const paused = d.status === 'paused'
   return (
     <div className="dlprog">
-      <div className="dlbar mini"><div className="dlfill" style={{ width: pct + '%' }} /></div>
-      <div className="mono faint" style={{ fontSize: 11 }}>
-        {d.status === 'queued' || d.totalBytes === 0
-          ? 'Starting…'
-          : `${pct}% · ${fmtB(d.receivedBytes)}/${fmtB(d.totalBytes)} · ${(d.throughputBps / 1024 ** 2).toFixed(1)} MB/s${d.etaSeconds != null ? ` · ${d.etaSeconds}s` : ''}`}
+      <div className="dlbar mini"><div className="dlfill" style={{ width: pct + '%', opacity: paused ? 0.5 : 1 }} /></div>
+      <div className="dlprogrow">
+        <span className="mono faint" style={{ fontSize: 11 }}>
+          {paused ? `paused · ${pct}%`
+            : d.status === 'queued' || d.totalBytes === 0 ? 'Starting…'
+            : `${pct}% · ${fmtB(d.receivedBytes)}/${fmtB(d.totalBytes)} · ${(d.throughputBps / 1024 ** 2).toFixed(1)} MB/s${d.etaSeconds != null ? ` · ${d.etaSeconds}s` : ''}`}
+        </span>
+        <div className="dlbtns">
+          {paused
+            ? <button className="dlbtn" title="Resume" onClick={() => onResume(d.id)}>▶</button>
+            : <button className="dlbtn" title="Pause" onClick={() => onPause(d.id)}>⏸</button>}
+          <button className="dlbtn danger" title="Cancel" onClick={() => onCancel(d.id)}>✕</button>
+        </div>
       </div>
     </div>
   )
 }
 
-function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy, dl, goLibrary }: {
+function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy, dl, dlActions }: {
   q: Quant; v?: FitVerdict; ctxLabel: string; vramAvail: string
   open: boolean; onToggle: () => void; onDownload: () => void; busy: boolean
-  dl?: DownloadState; goLibrary: () => void
+  dl?: DownloadState; dlActions: DlActions
 }) {
   const bd = v?.breakdown
   const pinned = isPinned(q.sha256)
@@ -58,7 +69,7 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy,
           </> : (v?.explainability ?? '')}
           <div style={{ marginTop: 10 }}>
             {dl
-              ? <DlProgress d={dl} goLibrary={goLibrary} />
+              ? <DlProgress d={dl} {...dlActions} />
               : v?.verdict === 'EXCEEDS_MACHINE'
                 ? <span className="faint">Won't fit on this machine.</span>
                 : !pinned
@@ -71,10 +82,10 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy,
   )
 }
 
-function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey, dlMap, goLibrary }: {
+function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey, dlMap, dlActions }: {
   entry: CatalogEntry; vmap: Map<string, FitVerdict>; ctxLabel: string; vramAvail: string; lead?: boolean
   openQ: string | null; setOpenQ: (k: string | null) => void; download: (e: CatalogEntry, q: Quant) => void; busyKey: string | null
-  dlMap: Map<string, DownloadState>; goLibrary: () => void
+  dlMap: Map<string, DownloadState>; dlActions: DlActions
 }) {
   const caps = [entry.capabilities.tools && 'tools', entry.capabilities.reasoning && 'reasoning', entry.capabilities.vision && 'vision'].filter(Boolean) as string[]
   // Best downloadable quant = pinned checksum + a runnable verdict, ranked by fit then size.
@@ -101,7 +112,7 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
           </div>
         </div>
         {entryDl
-          ? <DlProgress d={entryDl} goLibrary={goLibrary} />
+          ? <DlProgress d={entryDl} {...dlActions} />
           : dlQuant
           ? <button className={`btn ${lead ? 'btn-iris' : 'btn-line'} btn-sm`} disabled={busyThis} onClick={() => download(entry, dlQuant)}>{busyThis ? 'Starting…' : `Install · ${dlQuant.label} · ${fmtB(dlQuant.bytes)}`}</button>
           : anyPinned
@@ -111,7 +122,7 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
       <div className="qtable">
         {entry.quants.map(q => {
           const key = `${entry.id}|${q.label}`
-          return <QuantRow key={key} q={q} v={vmap.get(key)} ctxLabel={ctxLabel} vramAvail={vramAvail} open={openQ === key} onToggle={() => setOpenQ(openQ === key ? null : key)} onDownload={() => download(entry, q)} busy={busyKey === key} dl={dlMap.get(key)} goLibrary={goLibrary} />
+          return <QuantRow key={key} q={q} v={vmap.get(key)} ctxLabel={ctxLabel} vramAvail={vramAvail} open={openQ === key} onToggle={() => setOpenQ(openQ === key ? null : key)} onDownload={() => download(entry, q)} busy={busyKey === key} dl={dlMap.get(key)} dlActions={dlActions} />
         })}
       </div>
     </div>
@@ -180,10 +191,11 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
   // navigating away to the Library (which made a running download look "stuck on Starting").
   const dlMap = useMemo(() => {
     const m = new Map<string, DownloadState>()
-    // A model|quant can have several rows over time (e.g. a cancelled attempt + a fresh one). The
-    // API returns them newest-first, so keep the first (most recent) per key — otherwise a stale
-    // cancelled/failed row would shadow the live download and the card would look wrong.
-    for (const d of downloads) { const k = `${d.modelId}|${d.quantLabel}`; if (!m.has(k)) m.set(k, d) }
+    // Only surface a *live* or *done* download on the card (in-flight / paused / completed). Rows
+    // are newest-first, so keep the first such per key. Cancelled/failed/quarantined rows are
+    // deliberately skipped so the card falls back to the Install button — letting the user retry.
+    const shown = (s: string) => s === 'active' || s === 'queued' || s === 'paused' || s === 'completed'
+    for (const d of downloads) { const k = `${d.modelId}|${d.quantLabel}`; if (!m.has(k) && shown(d.status)) m.set(k, d) }
     return m
   }, [downloads])
 
@@ -194,6 +206,13 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
     setBusyKey(null)
     if (!r.ok) { alert('Download refused: ' + (r.error || 'unknown')); return }
     pollDownloads() // surface progress inline immediately; the poll keeps it live
+  }
+
+  const dlActions: DlActions = {
+    onPause: async (id) => { await api.pauseDownload(id); pollDownloads() },
+    onResume: async (id) => { await api.resumeDownload(id); pollDownloads() },
+    onCancel: async (id) => { await api.cancelDownload(id); pollDownloads() },
+    goLibrary,
   }
 
   return (
@@ -229,9 +248,9 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
         </div>
       )}
 
-      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} goLibrary={goLibrary} />}
+      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} dlActions={dlActions} />}
       <div style={{ marginTop: 22 }}>
-        {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} goLibrary={goLibrary} />)}
+        {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} dlActions={dlActions} />)}
       </div>
     </div>
   )

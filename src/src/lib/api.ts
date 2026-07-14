@@ -313,6 +313,8 @@ export const api = {
   startDownload: (body: { modelId: string; quantLabel: string }) =>
     apiFetch<ApiResponse<DownloadState>>('/api/downloads/start', { method: 'POST', body: JSON.stringify(body) }),
   cancelDownload: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/downloads/${id}/cancel`, { method: 'DELETE' }),
+  pauseDownload: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/downloads/${id}/pause`, { method: 'POST' }),
+  resumeDownload: (id: string) => apiFetch<ApiResponse<boolean>>(`/api/downloads/${id}/resume`, { method: 'POST' }),
   ollamaModels: () => apiFetch<ApiResponse<OllamaModel[]>>('/api/ollama/models'),
   // Server re-resolves the blob + digest from the manifest; the client only names the model.
   // `mode: "copy"` opts into a cross-volume copy (OLL-4); same-volume adoptions ignore it.

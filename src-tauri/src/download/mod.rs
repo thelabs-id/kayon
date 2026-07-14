@@ -11,8 +11,9 @@ use crate::ipc::*;
 
 pub struct DownloadManager {
     client: reqwest::Client,
-    // Ids of downloads the user has cancelled; the streaming loop polls this and aborts so a
-    // cancelled transfer never later completes and installs the model (DL).
+    // Ids of downloads the user has asked to STOP (cancel or pause); the streaming loop polls this
+    // every chunk and aborts, so a stopped transfer never later completes and installs the model.
+    // The endpoint sets the row's status (Cancelled/Paused) — the loop only stops (DL).
     cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
@@ -25,7 +26,7 @@ impl DownloadManager {
         Self { client, cancelled: std::sync::Mutex::new(std::collections::HashSet::new()) }
     }
 
-    fn is_cancelled(&self, id: &str) -> bool {
+    fn stop_requested(&self, id: &str) -> bool {
         self.cancelled.lock().unwrap().contains(id)
     }
 
@@ -122,6 +123,12 @@ impl DownloadManager {
         download_id: &str,
         progress_tx: Option<mpsc::Sender<DownloadProgress>>,
     ) -> Result<()> {
+        // Any prior pause/cancel stop signal for this id is void now that we are (re)driving it —
+        // clear it so the streaming loop doesn't immediately abort. (A fresh start isn't in the set,
+        // so this is a harmless no-op there.) The immediate per-chunk stop means the previous task,
+        // if any, already returned long before a human can click Resume, so there is no double-drive.
+        self.cancelled.lock().unwrap().remove(download_id);
+
         let state = db.get_download(download_id)?
             .ok_or_else(|| anyhow!("download not found"))?;
 
@@ -196,10 +203,10 @@ impl DownloadManager {
             let mut stream = resp.bytes_stream();
             use futures_util::StreamExt;
             while let Some(chunk) = stream.next().await {
-                // Cooperative cancellation: if the download row was cancelled, stop streaming
-                // so a cancelled transfer never later marks itself completed/installed (DL).
-                if self.is_cancelled(download_id) {
-                    db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+                // Cooperative stop: if the user cancelled or paused this download, stop streaming so
+                // it never later marks itself completed/installed. The partial file is left on disk
+                // for a resume (DL-1); the endpoint already set the row's status (Cancelled/Paused).
+                if self.stop_requested(download_id) {
                     return Ok(());
                 }
                 let chunk = chunk?;
@@ -250,9 +257,9 @@ impl DownloadManager {
             file.flush()?;
         }
 
-        // If cancelled during the transfer or verification window, do not install (DL).
-        if self.is_cancelled(download_id) {
-            db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+        // If stopped during the transfer or verification window, do not install (DL). Status was
+        // already set by the pause/cancel endpoint.
+        if self.stop_requested(download_id) {
             return Ok(());
         }
 
@@ -299,6 +306,15 @@ impl DownloadManager {
         // Signal the in-flight streaming task to stop, then mark the row cancelled.
         self.cancelled.lock().unwrap().insert(download_id.to_string());
         db.set_download_status(download_id, &DownloadStatus::Cancelled)?;
+        Ok(())
+    }
+
+    /// Pause an in-flight download: signal the streaming loop to stop and mark the row Paused. The
+    /// partial bytes stay on disk (writes are unbuffered), so `resume_download` continues from the
+    /// file length via a Range request — same mechanism as the DL-1 restart resume.
+    pub async fn pause_download(&self, db: &Arc<Database>, download_id: &str) -> Result<()> {
+        self.cancelled.lock().unwrap().insert(download_id.to_string());
+        db.set_download_status(download_id, &DownloadStatus::Paused)?;
         Ok(())
     }
 }

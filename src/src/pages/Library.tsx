@@ -50,7 +50,11 @@ export default function Library({ goBrowser, goPrivacy, onChange, goChat }: {
     return () => clearInterval(iv)
   }, [])
 
-  const active = downloads.filter(d => d.status === 'active' || d.status === 'queued')
+  const active = downloads.filter(d => d.status === 'active' || d.status === 'queued' || d.status === 'paused')
+  const refreshDownloads = async () => { const d = await api.downloads(); if (d.ok && d.data) setDownloads(d.data) }
+  const pauseDl = async (id: string) => { await api.pauseDownload(id); refreshDownloads() }
+  const resumeDl = async (id: string) => { await api.resumeDownload(id); refreshDownloads() }
+  const cancelDl = async (id: string) => { await api.cancelDownload(id); refreshDownloads() }
   const totalBytes = models.reduce((s, m) => s + m.bytes, 0)
   const adoptable = ollama.filter(o => o.adoptable)
 
@@ -82,24 +86,34 @@ export default function Library({ goBrowser, goPrivacy, onChange, goChat }: {
         <button className="btn btn-line btn-sm" onClick={goBrowser}>+ Browse catalog</button>
       </div>
 
-      {active.map(d => (
+      {active.map(d => {
+        const paused = d.status === 'paused'
+        return (
         <div key={d.id} className="dlcard">
           <div className="fx ac jb">
             <div className="fx ac gap12">
-              <span className="livedot" style={{ background: 'var(--iris)' }} />
+              <span className="livedot" style={{ background: paused ? 'var(--faint)' : 'var(--iris)', animation: paused ? 'none' : undefined }} />
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14.5 }}>{d.modelId} · {d.quantLabel}</div>
-                <div className="mono faint" style={{ fontSize: 11.5, marginTop: 2 }}>downloading · resumable · SHA-256 verified on completion</div>
+                <div className="mono faint" style={{ fontSize: 11.5, marginTop: 2 }}>{paused ? 'paused · resumable · partial kept on disk' : 'downloading · resumable · SHA-256 verified on completion'}</div>
               </div>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div className="mono" style={{ fontSize: 13, color: 'var(--iris)' }}>{d.totalBytes > 0 ? ((d.receivedBytes / d.totalBytes) * 100).toFixed(0) : 0}%</div>
-              <div className="mono faint" style={{ fontSize: 11 }}>{(d.throughputBps / 1024 ** 2).toFixed(1)} MB/s{d.etaSeconds != null ? ` · ${d.etaSeconds}s` : ''}</div>
+            <div className="fx ac gap12">
+              <div style={{ textAlign: 'right' }}>
+                <div className="mono" style={{ fontSize: 13, color: paused ? 'var(--muted)' : 'var(--iris)' }}>{d.totalBytes > 0 ? ((d.receivedBytes / d.totalBytes) * 100).toFixed(0) : 0}%</div>
+                <div className="mono faint" style={{ fontSize: 11 }}>{paused ? `${fmt(d.receivedBytes)} / ${fmt(d.totalBytes)}` : `${(d.throughputBps / 1024 ** 2).toFixed(1)} MB/s${d.etaSeconds != null ? ` · ${d.etaSeconds}s` : ''}`}</div>
+              </div>
+              <div className="fx gap8">
+                {paused
+                  ? <button className="btn btn-sm btn-line" onClick={() => resumeDl(d.id)}>Resume</button>
+                  : <button className="btn btn-sm btn-line" onClick={() => pauseDl(d.id)}>Pause</button>}
+                <button className="btn btn-sm btn-line" onClick={() => cancelDl(d.id)}>Cancel</button>
+              </div>
             </div>
           </div>
-          <div className="dlbar"><div className="dlfill" style={{ width: `${d.totalBytes > 0 ? (d.receivedBytes / d.totalBytes) * 100 : 0}%` }} /></div>
+          <div className="dlbar"><div className="dlfill" style={{ width: `${d.totalBytes > 0 ? (d.receivedBytes / d.totalBytes) * 100 : 0}%`, opacity: paused ? 0.5 : 1 }} /></div>
         </div>
-      ))}
+      )})}
 
       <div style={{ marginBottom: 10 }} className="fx ac jb">
         <span className="mono" style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--faint)' }}>Installed · {models.length} models · {fmt(totalBytes)}</span>

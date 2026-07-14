@@ -153,6 +153,11 @@
 /* Inline install progress on a model-browser card (no top margin; fixed compact width). */
 .dlprog{display:flex;flex-direction:column;align-items:flex-end;gap:5px;min-width:220px}
 .dlbar.mini{width:220px;margin-top:0;height:6px}
+.dlprogrow{display:flex;align-items:center;gap:10px;justify-content:flex-end}
+.dlbtns{display:flex;gap:5px;flex:none}
+.dlbtn{width:22px;height:22px;border-radius:5px;border:1px solid var(--line2);background:transparent;color:var(--muted);cursor:pointer;font-size:10px;line-height:1;display:inline-flex;align-items:center;justify-content:center;transition:.15s}
+.dlbtn:hover{color:var(--ink);border-color:var(--ink)}
+.dlbtn.danger:hover{color:var(--danger);border-color:var(--danger)}
 /* "Finding the right model" / discovery indicator strip. */
 .findbar{display:flex;align-items:center;gap:10px;padding:11px 16px;margin-bottom:18px;border:1px solid color-mix(in oklab,var(--iris) 30%,var(--line2));border-radius:10px;background:color-mix(in oklab,var(--iris) 7%,var(--panel));color:var(--iris);font-size:13px}
 .findspin{width:13px;height:13px;border-radius:999px;border:2px solid color-mix(in oklab,var(--iris) 30%,transparent);border-top-color:var(--iris);animation:findspin .8s linear infinite;flex:none}

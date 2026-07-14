@@ -105,6 +105,8 @@ pub fn start_api_server() {
         .route("/api/downloads", get(list_downloads))
         .route("/api/downloads/start", post(start_download))
         .route("/api/downloads/{id}/cancel", delete(cancel_download))
+        .route("/api/downloads/{id}/pause", post(pause_download))
+        .route("/api/downloads/{id}/resume", post(resume_download))
         .route("/api/ollama/models", get(ollama_models))
         .route("/api/ollama/adopt", post(ollama_adopt))
         .route("/api/runtime/start", post(runtime_start))
@@ -497,6 +499,29 @@ async fn cancel_download(
 ) -> impl IntoResponse {
     match s.dl.cancel_download(&s.db, &id).await {
         Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+async fn pause_download(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    match s.dl.pause_download(&s.db, &id).await {
+        Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+async fn resume_download(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    // Mark it active again and re-drive from the partial file on disk (DL-1). Only a paused/failed
+    // row should be resumed; an active one is already running.
+    match s.db.get_download(&id) {
+        Ok(Some(d)) if matches!(d.status, DownloadStatus::Paused | DownloadStatus::Failed) => {
+            let _ = s.db.set_download_status(&id, &DownloadStatus::Active);
+            let (db, dl, did) = (s.db.clone(), s.dl.clone(), id.clone());
+            tokio::spawn(async move { dl.drive(&db, &did).await; });
+            ok_json(true).into_response()
+        }
+        Ok(Some(_)) => err_json("download is not paused").into_response(),
+        Ok(None) => err_json("download not found").into_response(),
         Err(e) => err_json(&e.to_string()).into_response(),
     }
 }
