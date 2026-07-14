@@ -39,6 +39,17 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
   useEffect(() => { loadSessions() }, [])
 
+  // RUN-5: per-session settings (system prompt + sampling params) are part of session state, so they
+  // must persist even if the user edits them and then switches chats / starts a new one / closes the
+  // app WITHOUT sending. A latest-value ref lets us flush on those transitions without a stale closure.
+  const settingsRef = useRef({ activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId })
+  useEffect(() => { settingsRef.current = { activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId } })
+  const flushSettings = () => {
+    const s = settingsRef.current
+    if (s.activeId) api.updateChatSettings(s.activeId, { systemPrompt: s.sys, temperature: s.temp, topP: s.topP, maxTokens: s.maxTok, modelId: s.modelId })
+  }
+  useEffect(() => () => flushSettings(), []) // flush on unmount (navigating away / closing the page)
+
   const loadSessions = async () => {
     const r = await api.chatSessions()
     if (r.ok && r.data) setSessions(r.data)
@@ -50,6 +61,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
 
   const newChat = () => {
     if (busy) return // don't reset the view out from under an in-flight stream
+    flushSettings() // save the outgoing session's settings before clearing them
     setActiveId(null); setActiveTitle('New chat'); setMsgs([]); setInput('')
     setSys(DEFAULT_SYS); setEditingTitle(false)
   }
@@ -58,11 +70,13 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     // Switching sessions mid-stream would let the still-running loop write chunks into the newly
     // shown transcript while the assistant reply persists to the old session. Block it while busy.
     if (busy || id === activeId) return
+    flushSettings() // save the current session's settings before loading the next one
     const r = await api.chatSession(id)
     if (!r.ok || !r.data) return
     const d = r.data
     setActiveId(d.id); setActiveTitle(d.title)
-    setSys(d.systemPrompt || DEFAULT_SYS); setTemp(d.temperature); setTopP(d.topP); setMaxTok(d.maxTokens)
+    // `??` not `||`: an intentionally-empty system prompt must survive reopen, not revert to default.
+    setSys(d.systemPrompt ?? DEFAULT_SYS); setTemp(d.temperature); setTopP(d.topP); setMaxTok(d.maxTokens)
     setMsgs(d.messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content, reasoning: m.reasoning })))
     setEditingTitle(false); setInput('')
   }
