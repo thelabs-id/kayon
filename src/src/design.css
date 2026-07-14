@@ -8,9 +8,9 @@
 
 .kyn{--paper:#15120D;--ink:#F3EEE3;--muted:#9A9183;--faint:#615A4E;--line:#2A251D;--line2:#37301F;--panel:#1C1813;--panel2:#221E17;--iris:#E0916B;--amber:#E0A33E;--ink-fg:#15120D;--v-full:#4FA97C;--v-tight:#E0A33E;--v-split:#E0916B;--v-cpu:#7C93B8;--v-exceed:#C86A5C;--v-unv:#8A8172;--ok:#4FA97C;--danger:#C86A5C}
 .kyn.light{--paper:#FAF7F1;--ink:#16130E;--muted:#6E665A;--faint:#A8A091;--line:#E5DDCF;--line2:#D8CEBC;--panel:#FFFDF9;--panel2:#F3EEE3;--iris:#C0553A;--amber:#A86A12;--ink-fg:#FAF7F1;--v-full:#3E9B6E;--v-tight:#C98A2B;--v-split:#C0553A;--v-cpu:#4C67A8;--v-exceed:#C0392B;--v-unv:#6E665A;--ok:#3E9B6E;--danger:#C0392B}
-.desk{min-height:100vh;background:repeating-linear-gradient(135deg,#0d0b08,#0d0b08 22px,#100d09 22px,#100d09 44px);display:flex;align-items:center;justify-content:center;padding:26px;box-sizing:border-box}
-.kyn.light .desk,.desk.light{background:repeating-linear-gradient(135deg,#efe9dd,#efe9dd 22px,#f3eee3 22px,#f3eee3 44px)}
-.win{width:1280px;max-width:100%;height:860px;background:var(--paper);color:var(--ink);border:1px solid var(--line2);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;font-family:'Geist Variable',ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;box-shadow:0 40px 90px -30px rgba(0,0,0,.7)}
+.desk{height:100vh;display:flex;box-sizing:border-box}
+.desk>.kyn{flex:1;display:flex;min-width:0;min-height:0}
+.win{flex:1;min-width:0;height:100vh;background:var(--paper);color:var(--ink);border:0;border-radius:0;overflow:hidden;display:flex;flex-direction:column;font-family:'Geist Variable',ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;box-shadow:none}
 .mono{font-family:'Geist Mono Variable',ui-monospace,monospace}
 .serif{font-family:'Instrument Serif',Georgia,serif;font-weight:400}
 .ital{font-style:italic}
@@ -20,7 +20,7 @@
 .posrel{position:relative}
 /* title bar */
 .tbar{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
-.traffic{display:flex;gap:8px}
+.traffic{display:none}
 .tdot{width:12px;height:12px;border-radius:999px;border:0;cursor:pointer}
 .tclose{background:#E06C60}.tmin{background:#E0A33E}.tmax{background:#4FA97C}
 .tcenter{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12.5px}
