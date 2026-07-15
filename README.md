@@ -233,6 +233,12 @@ These are documented tradeoffs, not silent divergences:
   returning raw binary bytes, so attaching a PDF and asking the model to read/summarize it works.
   Oversized (>25 MB) or image-only/scanned PDFs return a clear message; non-PDF binaries are refused
   rather than fed to the model as garbage.
+- **Forgiving filenames (v1.3.2).** Models often truncate a long attached filename (dropping a
+  prefix, an en-dash, or spaces — asking for `Timeline.pdf` when the file is
+  `Avrist Agent App – Timeline.pdf`). `read_file` now resolves a **unique** case-insensitive
+  basename match (exact → suffix → substring) — re-validated through the workspace scope guard, so
+  a symlink can't escape — and, on a miss, returns the actual file names so the model retries with
+  the right one instead of hallucinating. The attach note also quotes the exact names.
 
 ## Tools (agentic tool calling — TOOL family)
 

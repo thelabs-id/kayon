@@ -200,8 +200,9 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
 
   const send = async () => {
     if (!input.trim() || !running || busy) return
-    // Note any newly-attached files so the model knows to read them from the workspace.
-    const note = staged.length ? `[Attached files in the workspace: ${staged.map(f => f.name).join(', ')}]\n\n` : ''
+    // Note any newly-attached files so the model knows to read them. Quote the exact names and tell
+    // it to use read_file with that exact path — models otherwise truncate long/spaced filenames.
+    const note = staged.length ? `[Attached to this chat's workspace: ${staged.map(f => `"${f.name}"`).join(', ')}. Use the read_file tool with the exact file name to read one.]\n\n` : ''
     const text = note + input; setInput(''); setBusy(true)
     const history = msgs.map(m => ({ role: m.role, content: m.content }))
     setMsgs(m => [...m, { role: 'user', content: text }, { role: 'assistant', content: '' }])

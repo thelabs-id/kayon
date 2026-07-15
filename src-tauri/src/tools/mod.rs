@@ -244,6 +244,55 @@ fn resolve_in_workspace(ctx: &ToolContext, rel: &str, for_write: bool) -> Result
     }
 }
 
+/// Resolve a path for *reading*, forgivingly. Models often mangle an attached file's long name
+/// (dropping a prefix, an en-dash, or spaces — e.g. asking for `Timeline.pdf` when the file is
+/// `Avrist Agent App – Timeline.pdf`). So if the exact path isn't found, fall back to a UNIQUE
+/// case-insensitive match among the workspace's files by basename (exact → suffix → substring). If
+/// nothing unambiguously matches, return an error that lists the real file names so the model can
+/// retry with the right one instead of hallucinating.
+fn resolve_read_path(ctx: &ToolContext, rel: &str) -> Result<PathBuf, String> {
+    if let Ok(p) = resolve_in_workspace(ctx, rel, false) {
+        return Ok(p);
+    }
+    let root = ctx
+        .workspace
+        .as_ref()
+        .ok_or("no workspace folder is attached to this chat")?
+        .canonicalize()
+        .map_err(|e| format!("workspace folder is unavailable: {e}"))?;
+    let want = std::path::Path::new(rel)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(rel)
+        .to_lowercase();
+    // Names of files (not subdirs) that are direct children of the workspace root.
+    let names: Vec<String> = std::fs::read_dir(&root)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.metadata().map(|m| m.is_file()).unwrap_or(false))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    let unique = |pred: &dyn Fn(&str) -> bool| -> Option<String> {
+        let mut it = names.iter().filter(|n| pred(&n.to_lowercase()));
+        match (it.next(), it.next()) {
+            (Some(n), None) => Some(n.clone()),
+            _ => None,
+        }
+    };
+    if let Some(name) = unique(&|n| n == want)
+        .or_else(|| unique(&|n| n.ends_with(&want)))
+        .or_else(|| unique(&|n| n.contains(&want)))
+    {
+        // Re-validate the matched name through the scoped resolver so the confinement guarantee holds
+        // even for the fuzzy path: it canonicalizes (resolving symlinks) and rejects any escape.
+        return resolve_in_workspace(ctx, &name, false);
+    }
+    Err(format!(
+        "no file matching '{rel}' in the workspace. Available files: {}",
+        if names.is_empty() { "(none)".to_string() } else { names.join(", ") }
+    ))
+}
+
 fn list_dir(ctx: &ToolContext, rel: &str) -> Result<String, String> {
     let dir = resolve_in_workspace(ctx, rel, false)?;
     let md = std::fs::metadata(&dir).map_err(|e| e.to_string())?;
@@ -289,7 +338,7 @@ fn list_dir(ctx: &ToolContext, rel: &str) -> Result<String, String> {
 
 fn read_file(ctx: &ToolContext, rel: &str) -> Result<String, String> {
     use std::io::Read;
-    let path = resolve_in_workspace(ctx, rel, false)?;
+    let path = resolve_read_path(ctx, rel)?;
 
     // A PDF is binary — reading it as UTF-8 gives the model garbage — so extract its text instead.
     // Detect by magic bytes (authoritative) with the extension as a fallback.
@@ -1048,6 +1097,25 @@ mod tests {
         // A binary file is refused with a message, not returned as garbage.
         let err = read_file(&ctx, "blob.bin").unwrap_err();
         assert!(err.contains("binary"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn read_file_forgives_truncated_names() {
+        let tmp = std::env::temp_dir().join(format!("kayon-fuzzy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("Avrist Agent App – Timeline.txt"), "the real content").unwrap();
+        let ctx = ctx_with_ws(tmp.clone());
+        // The model asks for the truncated tail; we resolve it uniquely by suffix.
+        assert!(read_file(&ctx, "Timeline.txt").unwrap().contains("the real content"));
+        // Case-insensitive substring also resolves.
+        assert!(read_file(&ctx, "timeline").unwrap().contains("the real content"));
+        // A miss lists the available files rather than erroring blankly.
+        let err = read_file(&ctx, "nope.txt").unwrap_err();
+        assert!(err.contains("Available files") && err.contains("Timeline"), "got: {err}");
+        // Ambiguous: two files sharing a suffix -> no silent guess.
+        std::fs::write(tmp.join("Another Timeline.txt"), "other").unwrap();
+        assert!(read_file(&ctx, "Timeline.txt").is_err());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
