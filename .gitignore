@@ -29,3 +29,6 @@ Thumbs.db
 
 # Bundled llama-server runtime (large; staged at build time, not committed)
 /src-tauri/binaries/
+
+# Codex review build cache
+/src-tauri/target-review/

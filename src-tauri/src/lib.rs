@@ -8,6 +8,8 @@ pub mod download;
 pub mod library;
 pub mod ollama;
 pub mod runtime;
+pub mod tools;
+pub mod agent;
 pub mod telemetry;
 pub mod ipc;
 
@@ -17,7 +19,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Json, sse::{Event, Sse}},
+    response::{IntoResponse, Json, sse::{Event, KeepAlive, Sse}},
     routing::{get, post, delete},
     Router,
 };
@@ -29,11 +31,18 @@ use std::time::Duration;
 
 use ipc::*;
 
+/// `~/.kayon` — the app's data root (DB, library, per-session auto-workspaces).
+pub fn kayon_home() -> std::path::PathBuf {
+    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".kayon")
+}
+
 #[derive(Clone)]
 struct AppState {
     db: Arc<db::Database>,
     dl: Arc<download::DownloadManager>,
     rt: Arc<runtime::RuntimeManager>,
+    // TOOL-6: pending tool-confirmation channels, keyed by call id, resolved by /api/tools/decision.
+    tool_decisions: agent::Decisions,
 }
 
 /// Start the local API server (the same Axum app the browser build serves) on a background
@@ -48,7 +57,7 @@ pub fn start_api_server() {
     let dl = Arc::new(download::DownloadManager::new());
     let rt = Arc::new(runtime::RuntimeManager::new());
 
-    let state = AppState { db, dl, rt };
+    let state = AppState { db, dl, rt, tool_decisions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())) };
 
     // DL-1: resume any downloads that were mid-flight when the app last exited. Their partial
     // files and rows are persisted, so we re-drive them (Range-resumed) on startup.
@@ -124,6 +133,12 @@ pub fn start_api_server() {
         .route("/api/chat/sessions/{id}/rename", post(rename_chat_session))
         .route("/api/chat/sessions/{id}/settings", post(update_chat_settings))
         .route("/api/chat/sessions/{id}/messages", post(append_chat_message))
+        // TOOL family: the agentic tool loop (SSE) and the side-effect confirmation channel.
+        .route("/api/chat/agent", post(chat_agent))
+        .route("/api/tools/decision", post(tool_decision))
+        // Session workspace: attach files + list files (attached + model-created artifacts).
+        .route("/api/chat/sessions/{id}/files", post(attach_file))
+        .route("/api/chat/sessions/{id}/workspace", get(list_workspace))
         .fallback(static_handler)
         // Defence in depth against CSRF to the loopback control API: CORS blocks reading
         // responses and preflighted requests, but a malicious page can still fire "simple"
@@ -906,6 +921,9 @@ struct CreateSessionBody {
     temperature: Option<f32>,
     top_p: Option<f32>,
     max_tokens: Option<i64>,
+    workspace: Option<String>,
+    web_enabled: Option<bool>,
+    auto_approve: Option<bool>,
 }
 
 async fn list_chat_sessions(State(s): State<AppState>) -> impl IntoResponse {
@@ -928,6 +946,9 @@ async fn create_chat_session(
         temperature: body.temperature.unwrap_or(0.7),
         top_p: body.top_p.unwrap_or(0.95),
         max_tokens: body.max_tokens.unwrap_or(2048),
+        workspace: body.workspace.filter(|w| !w.trim().is_empty()),
+        web_enabled: body.web_enabled.unwrap_or(false),
+        auto_approve: body.auto_approve.unwrap_or(false),
         created_at: now,
         updated_at: now,
     };
@@ -977,6 +998,12 @@ struct SettingsBody {
     top_p: f32,
     max_tokens: i64,
     model_id: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    web_enabled: bool,
+    #[serde(default)]
+    auto_approve: bool,
 }
 
 async fn update_chat_settings(
@@ -984,7 +1011,11 @@ async fn update_chat_settings(
     Path(id): Path<String>,
     Json(b): Json<SettingsBody>,
 ) -> impl IntoResponse {
-    match s.db.update_chat_session_settings(&id, &b.system_prompt, b.temperature, b.top_p, b.max_tokens, b.model_id.as_deref()) {
+    let ws = b.workspace.as_deref().filter(|w| !w.trim().is_empty());
+    match s.db.update_chat_session_settings(
+        &id, &b.system_prompt, b.temperature, b.top_p, b.max_tokens, b.model_id.as_deref(),
+        ws, b.web_enabled, b.auto_approve,
+    ) {
         Ok(_) => ok_json(true).into_response(),
         Err(e) => err_json(&e.to_string()).into_response(),
     }
@@ -996,6 +1027,8 @@ struct AppendMessageBody {
     role: String,
     content: String,
     reasoning: Option<String>,
+    #[serde(default)]
+    tools: Option<String>,
 }
 
 async fn append_chat_message(
@@ -1009,6 +1042,7 @@ async fn append_chat_message(
         role: b.role,
         content: b.content,
         reasoning: b.reasoning,
+        tools: b.tools,
         ordinal: 0, // reassigned below to the true slot returned by the DB
         created_at: chrono::Utc::now(),
     };
@@ -1016,6 +1050,182 @@ async fn append_chat_message(
         Ok(ordinal) => { msg.ordinal = ordinal; ok_json(msg).into_response() }
         Err(e) => err_json(&e.to_string()).into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentTurn {
+    role: String,
+    content: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBody {
+    messages: Vec<AgentTurn>,
+    #[serde(default)]
+    system_prompt: String,
+    #[serde(default = "default_temp")]
+    temperature: f32,
+    #[serde(default = "default_top_p")]
+    top_p: f32,
+    #[serde(default = "default_max_tok")]
+    max_tokens: i64,
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    web_enabled: bool,
+    #[serde(default)]
+    auto_approve: bool,
+    #[serde(default)]
+    selection: Option<String>,
+}
+
+fn default_temp() -> f32 { 0.7 }
+fn default_top_p() -> f32 { 0.95 }
+fn default_max_tok() -> i64 { 2048 }
+
+/// TOOL-1: run the agentic tool loop and stream events (tokens + tool calls) back over SSE.
+async fn chat_agent(
+    State(s): State<AppState>,
+    Json(b): Json<AgentBody>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    let status = s.rt.status();
+    if status.kind != RuntimeStatusKind::Running || status.port.is_none() {
+        tokio::spawn(async move {
+            let _ = tx
+                .send(serde_json::json!({ "type": "error", "message": "no model is loaded" }).to_string())
+                .await;
+        });
+    } else {
+        let port = status.port.unwrap();
+        let req = agent::AgentRequest {
+            messages: b.messages.into_iter().map(|t| (t.role, t.content)).collect(),
+            system_prompt: b.system_prompt,
+            temperature: b.temperature,
+            top_p: b.top_p,
+            max_tokens: b.max_tokens,
+            workspace: b.workspace.filter(|w| !w.trim().is_empty()),
+            session_id: b.session_id,
+            web_enabled: b.web_enabled,
+            auto_approve: b.auto_approve,
+            selection: b.selection,
+        };
+        let (db, decisions, supports) = (s.db.clone(), s.tool_decisions.clone(), status.supports_tools);
+        tokio::spawn(async move {
+            agent::run(db, port, supports, req, decisions, tx).await;
+        });
+    }
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|line| Ok(Event::default().data(line)));
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecisionBody {
+    call_id: String,
+    approved: bool,
+}
+
+/// TOOL-6: resolve a pending side-effect confirmation (Approve/Deny) from the UI.
+async fn tool_decision(State(s): State<AppState>, Json(b): Json<DecisionBody>) -> impl IntoResponse {
+    let sender = s.tool_decisions.lock().unwrap().remove(&b.call_id);
+    let found = sender.is_some();
+    if let Some(tx) = sender {
+        let _ = tx.send(b.approved);
+    }
+    ok_json(found)
+}
+
+/// The effective on-disk workspace for a session: the attached folder if the session set one, else
+/// the Kayon-owned auto-workspace (`~/.kayon/workspace/<id>/`), created lazily. Mirrors the agent
+/// loop's resolution so attach/list and the tools agree on where files live.
+fn session_workspace(s: &AppState, session_id: &str) -> Result<std::path::PathBuf, String> {
+    let attached = s.db.get_chat_session(session_id).ok().flatten()
+        .and_then(|sess| sess.workspace)
+        .filter(|w| !w.trim().is_empty());
+    let dir = match attached {
+        Some(w) => std::path::PathBuf::from(w),
+        None => kayon_home().join("workspace").join(session_id),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachBody {
+    name: String,
+    /// File bytes, base64-encoded.
+    content_base64: String,
+}
+
+/// Attach a file to a chat: decode it into the session's effective workspace so the model can
+/// `read_file` it. The name is reduced to a bare file name (no directory components) and the write
+/// stays inside the workspace.
+async fn attach_file(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<AttachBody>,
+) -> impl IntoResponse {
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(b.content_base64.as_bytes()) {
+        Ok(v) => v,
+        Err(e) => return err_json(&format!("invalid base64: {e}")).into_response(),
+    };
+    const MAX_ATTACH: usize = 25 * 1024 * 1024;
+    if bytes.len() > MAX_ATTACH {
+        return err_json("attached file exceeds 25 MB").into_response();
+    }
+    // Reduce to a safe bare file name — never a path.
+    let fname = std::path::Path::new(&b.name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_string())
+        .filter(|n| !n.is_empty() && n != "." && n != "..");
+    let Some(fname) = fname else {
+        return err_json("invalid file name").into_response();
+    };
+    let dir = match session_workspace(&s, &id) {
+        Ok(d) => d,
+        Err(e) => return err_json(&e).into_response(),
+    };
+    let path = dir.join(&fname);
+    // Defence in depth: the resolved parent must be the workspace (no traversal via the name).
+    if path.parent() != Some(dir.as_path()) {
+        return err_json("invalid file name").into_response();
+    }
+    match std::fs::write(&path, &bytes) {
+        Ok(_) => ok_json(serde_json::json!({ "name": fname, "bytes": bytes.len() })).into_response(),
+        Err(e) => err_json(&e.to_string()).into_response(),
+    }
+}
+
+/// List the files in a session's effective workspace (attached files + model-created artifacts).
+async fn list_workspace(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let dir = match session_workspace(&s, &id) {
+        Ok(d) => d,
+        Err(e) => return err_json(&e).into_response(),
+    };
+    let mut files: Vec<serde_json::Value> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries.into_iter().take(500) {
+            let md = e.metadata().ok();
+            let is_dir = md.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            files.push(serde_json::json!({
+                "name": e.file_name().to_string_lossy(),
+                "bytes": md.as_ref().map(|m| m.len()).unwrap_or(0),
+                "isDir": is_dir,
+            }));
+        }
+    }
+    ok_json(serde_json::json!({ "auto": s.db.get_chat_session(&id).ok().flatten().and_then(|x| x.workspace).filter(|w| !w.trim().is_empty()).is_none(), "files": files })).into_response()
 }
 
 async fn static_handler(

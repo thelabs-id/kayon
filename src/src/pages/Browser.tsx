@@ -84,11 +84,12 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy,
   )
 }
 
-function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, download, busyKey, dlMap, dlActions, installed }: {
-  entry: CatalogEntry; vmap: Map<string, FitVerdict>; ctxLabel: string; vramAvail: string; lead?: boolean
+function ModelCard({ entry, vmap, ctxLabel, vramAvail, leadTier, openQ, setOpenQ, download, busyKey, dlMap, dlActions, installed }: {
+  entry: CatalogEntry; vmap: Map<string, FitVerdict>; ctxLabel: string; vramAvail: string; leadTier?: 'fits' | 'runs'
   openQ: string | null; setOpenQ: (k: string | null) => void; download: (e: CatalogEntry, q: Quant) => void; busyKey: string | null
   dlMap: Map<string, DownloadState>; dlActions: DlActions; installed: Set<string>
 }) {
+  const lead = !!leadTier
   const caps = [entry.capabilities.tools && 'tools', entry.capabilities.reasoning && 'reasoning', entry.capabilities.vision && 'vision'].filter(Boolean) as string[]
   // Best downloadable quant = pinned checksum + a runnable verdict, ranked by fit then size.
   const dlQuant = entry.quants
@@ -103,7 +104,9 @@ function ModelCard({ entry, vmap, ctxLabel, vramAvail, lead, openQ, setOpenQ, do
   const entryDl = entry.quants.map(q => dlMap.get(`${entry.id}|${q.label}`)).find(Boolean)
   return (
     <div className={`mcard ${lead ? 'lead' : ''}`}>
-      {lead && <div className="leadbanner"><svg className="kmk" viewBox="0 0 64 64" width="15" height="15"><path className="ko" d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z" style={{ stroke: 'var(--iris)' }} /></svg><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best pick for your machine</span><span className="muted">— the most capable model that fits, computed from real free VRAM.</span></div>}
+      {lead && <div className="leadbanner"><svg className="kmk" viewBox="0 0 64 64" width="15" height="15"><path className="ko" d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z" style={{ stroke: 'var(--iris)' }} /></svg>{leadTier === 'fits'
+        ? <><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best pick for your machine</span><span className="muted">— the most capable model that fits, computed from real free VRAM.</span></>
+        : <><span style={{ color: 'var(--iris)', fontWeight: 600 }}>Best that runs on your machine</span><span className="muted">— no model fully fits your GPU; this one runs with CPU offload (slower). Computed from real free VRAM.</span></>}</div>}
       <div className="mhead">
         <div>
           <div className="mname">{entry.id}</div>
@@ -201,8 +204,16 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
 
   const score = (e: CatalogEntry) => Math.max(-1, ...e.quants.map(q => { const v = vmap.get(`${e.id}|${q.label}`); if (!v) return -1; return (99 - (order[v.verdict] ?? 99)) * 1e15 + q.bytes }))
   const sorted = useMemo(() => [...catalog].sort((a, b) => score(b) - score(a)), [catalog, vmap])
-  const lead = sorted[0]
-  const rest = sorted.slice(1)
+  // FR-1 / CAT-3 honesty: only crown a "best pick" that the machine can actually run. The top of the
+  // ranked list is EXCEEDS_MACHINE or UNVERIFIED_ARCH on small GPUs — presenting that as "the most
+  // capable model that fits" would be exactly the naive dishonesty Kayon exists to avoid. So gate the
+  // lead on a runnable verdict, and label it truthfully (fully fits vs. runs with CPU offload).
+  const bestOrder = (e: CatalogEntry) => Math.min(99, ...e.quants.map(q => { const v = vmap.get(`${e.id}|${q.label}`); return v ? (order[v.verdict] ?? 99) : 99 }))
+  const leadCandidate = sorted[0]
+  const leadOrd = leadCandidate ? bestOrder(leadCandidate) : 99
+  const leadTier: 'fits' | 'runs' | null = leadOrd <= order.FITS_TIGHT ? 'fits' : leadOrd <= order.CPU_ONLY ? 'runs' : null
+  const lead = leadTier ? leadCandidate : undefined
+  const rest = lead ? sorted.slice(1) : sorted
 
   const gpu = machine?.gpus?.[0]
   const vramAvail = gpu ? g(Math.max(0, gpu.telemetry.vramFreeBytes - Math.max(1024 ** 3, gpu.totalVramBytes * 0.1))) : '0'
@@ -268,7 +279,17 @@ export default function Browser({ machine, goLibrary }: { machine: MachineProfil
         </div>
       )}
 
-      {lead && <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} lead openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} dlActions={dlActions} installed={installed} />}
+      {lead
+        ? <ModelCard entry={lead} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} leadTier={leadTier!} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} dlActions={dlActions} installed={installed} />
+        : catalog.length > 0 && !discovering && !(loading && catalog.length === 0) && (
+          <div className="nofit">
+            <div className="nofit-head">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M15 9l-6 6M9 9l6 6" /></svg>
+              <span>No model fits this machine</span>
+            </div>
+            <p>Your GPU has about <b>{vramAvail} GB</b> free after display headroom — not enough to run any model in the catalog on the GPU. Everything below is still ranked by fit; a smaller model, a GPU+CPU split, or CPU-only may run (slower). Nothing is downloaded until you choose.</p>
+          </div>
+        )}
       <div style={{ marginTop: 22 }}>
         {rest.map(m => <ModelCard key={m.id} entry={m} vmap={vmap} ctxLabel={ctxLabel} vramAvail={vramAvail} openQ={openQ} setOpenQ={setOpenQ} download={download} busyKey={busyKey} dlMap={dlMap} dlActions={dlActions} installed={installed} />)}
       </div>

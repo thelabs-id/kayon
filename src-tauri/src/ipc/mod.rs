@@ -185,6 +185,10 @@ pub struct ChatMessage {
     pub content: String,
     /// Reasoning segment, when the model emitted one (RUN-3).
     pub reasoning: Option<String>,
+    /// TOOL-7: JSON array of the tool calls made in this turn (name, args, status, result), so the
+    /// saved transcript remains auditable — what was approved/executed — after a reload.
+    #[serde(default)]
+    pub tools: Option<String>,
     /// Monotonic position within the session, so ordering never depends on timestamp ties.
     pub ordinal: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -201,6 +205,15 @@ pub struct ChatSession {
     pub temperature: f32,
     pub top_p: f32,
     pub max_tokens: i64,
+    /// TOOL family: optional attached workspace folder (absolute path). Scopes filesystem/code tools.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// TOOL-5: per-session Web toggle (off by default).
+    #[serde(default)]
+    pub web_enabled: bool,
+    /// TOOL-6: auto-approve side-effectful tools (write_file/code) for this session (off by default).
+    #[serde(default)]
+    pub auto_approve: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -319,6 +332,10 @@ pub struct RuntimeStatus {
     pub n_gpu_layers: i32,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub message: Option<String>,
+    /// Whether the loaded model's GGUF chat template supports tool calling (TOOL-2). Detected at
+    /// load; drives whether the chat UI offers tools and whether the agent loop advertises them.
+    #[serde(default)]
+    pub supports_tools: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

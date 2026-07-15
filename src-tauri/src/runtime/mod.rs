@@ -28,6 +28,7 @@ impl RuntimeManager {
                 n_gpu_layers: 0,
                 started_at: None,
                 message: None,
+                supports_tools: false,
             }),
         }
     }
@@ -98,6 +99,17 @@ impl RuntimeManager {
             cmd.arg(arg);
         }
 
+        // TOOL-2: detect tool-calling from the model's GGUF chat template. When supported, launch
+        // llama-server with --jinja so it uses the embedded template and actually parses/serializes
+        // OpenAI tool calls — without --jinja, `tool_calls` are never emitted.
+        let supports_tools = crate::gguf::parse_gguf_header(std::path::Path::new(model_path))
+            .ok()
+            .map(|h| crate::gguf::template_supports_tools(&h))
+            .unwrap_or(false);
+        if supports_tools {
+            cmd.arg("--jinja");
+        }
+
         // Windows: llama-server is a console-subsystem exe, so spawning it normally pops a console
         // window on screen. We already capture its stdout/stderr (piped + drained below), so no
         // console is needed — CREATE_NO_WINDOW (0x08000000) starts it fully hidden.
@@ -133,6 +145,7 @@ impl RuntimeManager {
             n_gpu_layers,
             started_at: Some(Utc::now()),
             message: Some("waiting for /health".into()),
+            supports_tools,
         };
 
         Ok(())
@@ -195,6 +208,7 @@ impl RuntimeManager {
             n_gpu_layers: 0,
             started_at: None,
             message: None,
+            supports_tools: false,
         };
         Ok(())
     }

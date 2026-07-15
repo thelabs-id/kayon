@@ -208,6 +208,8 @@ export interface RuntimeStatus {
   nGpuLayers: number
   startedAt?: string
   message?: string
+  /** TOOL-2: whether the loaded model's GGUF chat template supports tool calling. */
+  supportsTools?: boolean
 }
 
 export interface OllamaModel {
@@ -261,6 +263,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   reasoning?: string
+  /** TOOL-7: JSON array of the tool calls made in this turn, so history stays auditable. */
+  tools?: string
   ordinal: number
   createdAt: string
 }
@@ -273,6 +277,9 @@ export interface ChatSession {
   temperature: number
   topP: number
   maxTokens: number
+  workspace?: string
+  webEnabled: boolean
+  autoApprove: boolean
   createdAt: string
   updatedAt: string
 }
@@ -295,6 +302,9 @@ export interface ChatSettings {
   topP: number
   maxTokens: number
   modelId?: string
+  workspace?: string
+  webEnabled?: boolean
+  autoApprove?: boolean
 }
 
 export const api = {
@@ -359,7 +369,7 @@ export const api = {
   createChatSession: (body: Partial<ChatSettings> & { title?: string }) =>
     apiFetch<ApiResponse<ChatSession>>('/api/chat/sessions', { method: 'POST', body: JSON.stringify(body) }),
   chatSession: (id: string) => apiFetch<ApiResponse<ChatSessionDetail>>(`/api/chat/sessions/${id}`),
-  appendChatMessage: (id: string, body: { role: string; content: string; reasoning?: string }) =>
+  appendChatMessage: (id: string, body: { role: string; content: string; reasoning?: string; tools?: string }) =>
     apiFetch<ApiResponse<ChatMessage>>(`/api/chat/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify(body) }),
   renameChatSession: (id: string, title: string) =>
     apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}/rename`, { method: 'POST', body: JSON.stringify({ title }) }),
@@ -367,4 +377,17 @@ export const api = {
     apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}/settings`, { method: 'POST', body: JSON.stringify(body) }),
   deleteChatSession: (id: string) =>
     apiFetch<ApiResponse<boolean>>(`/api/chat/sessions/${id}`, { method: 'DELETE' }),
+
+  // TOOL family: the agent loop is a streaming (SSE) POST, so callers use fetch() directly against
+  // this absolute URL rather than the JSON apiFetch helper.
+  agentUrl: () => `${BASE}/api/chat/agent`,
+  // TOOL-6: resolve a pending side-effect confirmation (Approve/Deny).
+  toolDecision: (callId: string, approved: boolean) =>
+    apiFetch<ApiResponse<boolean>>('/api/tools/decision', { method: 'POST', body: JSON.stringify({ callId, approved }) }),
+  // Attach a file into the session's workspace (auto-created if no folder is attached).
+  attachFile: (sessionId: string, name: string, contentBase64: string) =>
+    apiFetch<ApiResponse<{ name: string; bytes: number }>>(`/api/chat/sessions/${sessionId}/files`, { method: 'POST', body: JSON.stringify({ name, contentBase64 }) }),
+  // List files in the session workspace (attached files + model-created artifacts).
+  listWorkspace: (sessionId: string) =>
+    apiFetch<ApiResponse<{ auto: boolean; files: { name: string; bytes: number; isDir: boolean }[] }>>(`/api/chat/sessions/${sessionId}/workspace`),
 }

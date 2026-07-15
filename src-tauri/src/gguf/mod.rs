@@ -252,6 +252,19 @@ pub fn arch_from_header(h: &GgufHeader) -> Option<String> {
     h.metadata.get("general.architecture").and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
+/// Whether the model's GGUF chat template understands tool calling (TOOL-2). We read the actual
+/// `tokenizer.chat_template` and look for tool-call markers rather than guessing from a curated list:
+/// templates that support tools reference `tools` / `tool_calls` (Llama-3.1+, Qwen2.5, Hermes,
+/// Mistral, Functionary, …). A model without a template, or one whose template never mentions tools,
+/// is reported as non-tool-capable so Kayon never advertises tools a model can't honor.
+pub fn template_supports_tools(h: &GgufHeader) -> bool {
+    let Some(tmpl) = h.metadata.get("tokenizer.chat_template").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    let t = tmpl.to_lowercase();
+    t.contains("tool_call") || t.contains("tool_calls") || t.contains("tools")
+}
+
 pub fn attention_type(h: &GgufHeader) -> Option<String> {
     // Check the architecture-scoped key (`<arch>.attention.type`) as well as the general ones,
     // so a supported-arch model that declares hybrid/linear attention is caught, not treated as

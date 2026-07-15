@@ -32,6 +32,16 @@ impl Database {
         Ok(db)
     }
 
+    /// In-memory database for unit tests — same schema, no disk.
+    #[cfg(test)]
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let db = Self { conn: Mutex::new(conn), path: PathBuf::from(":memory:") };
+        db.init_tables()?;
+        Ok(db)
+    }
+
     fn init_tables(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
@@ -122,6 +132,12 @@ impl Database {
         // Migration for DBs created before the architecture column existed. Ignore the error if
         // the column is already present.
         let _ = conn.execute("ALTER TABLE installed_models ADD COLUMN architecture TEXT", []);
+        // TOOL family: per-session workspace folder + Web toggle + code/write auto-approve.
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN workspace TEXT", []);
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN web_enabled INTEGER NOT NULL DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE chat_sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0", []);
+        // TOOL-7: persist a per-message tool-call trace so saved history stays auditable.
+        let _ = conn.execute("ALTER TABLE chat_messages ADD COLUMN tools TEXT", []);
         Ok(())
     }
 
@@ -133,11 +149,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO chat_sessions
-             (id, title, model_id, system_prompt, temperature, top_p, max_tokens, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, title, model_id, system_prompt, temperature, top_p, max_tokens,
+              workspace, web_enabled, auto_approve, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 s.id, s.title, s.model_id, s.system_prompt, s.temperature as f64, s.top_p as f64,
-                s.max_tokens, s.created_at.to_rfc3339(), s.updated_at.to_rfc3339(),
+                s.max_tokens, s.workspace, s.web_enabled as i64, s.auto_approve as i64,
+                s.created_at.to_rfc3339(), s.updated_at.to_rfc3339(),
             ],
         )?;
         Ok(())
@@ -165,7 +183,8 @@ impl Database {
     pub fn get_chat_session(&self, id: &str) -> Result<Option<ChatSession>> {
         let conn = self.conn.lock().unwrap();
         let s = conn.query_row(
-            "SELECT id, title, model_id, system_prompt, temperature, top_p, max_tokens, created_at, updated_at
+            "SELECT id, title, model_id, system_prompt, temperature, top_p, max_tokens,
+                    workspace, web_enabled, auto_approve, created_at, updated_at
              FROM chat_sessions WHERE id = ?1",
             params![id],
             |r| Ok(ChatSession {
@@ -176,8 +195,11 @@ impl Database {
                 temperature: r.get::<_, f64>(4)? as f32,
                 top_p: r.get::<_, f64>(5)? as f32,
                 max_tokens: r.get(6)?,
-                created_at: parse_dt(r.get::<_, String>(7)?),
-                updated_at: parse_dt(r.get::<_, String>(8)?),
+                workspace: r.get(7)?,
+                web_enabled: r.get::<_, i64>(8)? != 0,
+                auto_approve: r.get::<_, i64>(9)? != 0,
+                created_at: parse_dt(r.get::<_, String>(10)?),
+                updated_at: parse_dt(r.get::<_, String>(11)?),
             }),
         ).optional()?;
         Ok(s)
@@ -186,7 +208,7 @@ impl Database {
     pub fn get_chat_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, session_id, role, content, reasoning, ordinal, created_at
+            "SELECT id, session_id, role, content, reasoning, tools, ordinal, created_at
              FROM chat_messages WHERE session_id = ?1 ORDER BY ordinal ASC",
         )?;
         let rows = stmt.query_map(params![session_id], |r| {
@@ -196,8 +218,9 @@ impl Database {
                 role: r.get(2)?,
                 content: r.get(3)?,
                 reasoning: r.get(4)?,
-                ordinal: r.get(5)?,
-                created_at: parse_dt(r.get::<_, String>(6)?),
+                tools: r.get(5)?,
+                ordinal: r.get(6)?,
+                created_at: parse_dt(r.get::<_, String>(7)?),
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -226,9 +249,9 @@ impl Database {
             |r| r.get(0),
         )?;
         conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, reasoning, ordinal, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![m.id, m.session_id, m.role, m.content, m.reasoning, next, m.created_at.to_rfc3339()],
+            "INSERT INTO chat_messages (id, session_id, role, content, reasoning, tools, ordinal, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![m.id, m.session_id, m.role, m.content, m.reasoning, m.tools, next, m.created_at.to_rfc3339()],
         )?;
         conn.execute(
             "UPDATE chat_sessions SET updated_at = ?2 WHERE id = ?1",
@@ -246,19 +269,21 @@ impl Database {
         Ok(())
     }
 
-    /// Persist a session's per-conversation settings (system prompt + sampling params).
+    /// Persist a session's per-conversation settings (system prompt + sampling params + TOOL
+    /// workspace/web/auto-approve).
+    #[allow(clippy::too_many_arguments)]
     pub fn update_chat_session_settings(
         &self, id: &str, system_prompt: &str, temperature: f32, top_p: f32, max_tokens: i64,
-        model_id: Option<&str>,
+        model_id: Option<&str>, workspace: Option<&str>, web_enabled: bool, auto_approve: bool,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE chat_sessions
              SET system_prompt = ?2, temperature = ?3, top_p = ?4, max_tokens = ?5, model_id = ?6,
-                 updated_at = ?7
+                 workspace = ?7, web_enabled = ?8, auto_approve = ?9, updated_at = ?10
              WHERE id = ?1",
             params![id, system_prompt, temperature as f64, top_p as f64, max_tokens, model_id,
-                    Utc::now().to_rfc3339()],
+                    workspace, web_enabled as i64, auto_approve as i64, Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }

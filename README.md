@@ -52,6 +52,8 @@ src-tauri/            Rust core
     library/          index · deterministic paths        (LIB)
     ollama/           discover · adopt (hard link)       (OLL)
     runtime/          llama-server sidecar supervisor    (RUN)
+    tools/            built-in tool set + executor       (TOOL)
+    agent/            server-side agentic tool loop      (TOOL)
     telemetry/        opt-in gate + outbound net log     (PRIV)
     db/               SQLite (rusqlite)                  (cross-cutting)
     ipc/              typed command/response contract    (cross-cutting)
@@ -220,6 +222,40 @@ These are documented tradeoffs, not silent divergences:
   fallback) are console-subsystem executables, so on Windows they flashed a console window when
   spawned. Both are now started with `CREATE_NO_WINDOW`; their stdout/stderr are still captured, so
   logs and health checks are unaffected — the window is simply never shown.
+
+## Tools (agentic tool calling — TOOL family)
+
+When a loaded model's GGUF chat template supports tool calling (detected at load, never guessed —
+TOOL-2), Chat offers a built-in, Kayon-vetted tool set through a server-side **agent loop**: the
+model's `tool_calls` are executed locally, results are fed back, and the loop continues (bounded
+iterations) until a final answer. Every call — name, arguments, result — is rendered **inline** in
+the transcript and **persisted** with the message, so saved history stays auditable (TOOL-7).
+
+- **Built-in tools (TOOL-3):** `calculator` (a deterministic expression evaluator, no `eval`),
+  `read_file` / `list_dir` / `write_file`, `read_selection`, a Python `code` interpreter, and web
+  `search` / `fetch_url`.
+- **Session workspace + artifacts (TOOL-4):** every chat has a workspace — a folder you attach, or a
+  Kayon-owned **auto-workspace** at `~/.kayon/workspace/<session>/` when you don't. The filesystem/code
+  tools operate only within it (paths canonicalized; `..`, absolute paths, and symlink escapes — incl.
+  a symlinked write target — refused). You can **attach files** (📎) which are copied into the
+  workspace so the model can `read_file` them, and model-created files land there as artifacts.
+- **Web is opt-in per session (TOOL-5):** a chat **Web toggle**, off by default, gates `search` /
+  `fetch_url`. The default provider is **DuckDuckGo** (no key, no account, direct from the machine),
+  and every query/URL is recorded in the network log (PRIV-5). `fetch_url` is **SSRF-guarded**: the
+  host is parsed with the same URL parser reqwest uses, resolved, and refused if it is
+  loopback/private/link-local; the vetted IP is pinned for the connection (no DNS-rebind) and every
+  redirect hop is re-checked and logged.
+- **Side effects are confirmation-gated (TOOL-6):** `code` **always** requires per-call Approve/Deny;
+  `write_file` requires it only into an **attached** folder — writes into the auto-workspace flow
+  through so artifacts appear without a click (an off-by-default auto-approve overrides). **The
+  confirmation is the security boundary** — v1 `code` runs a `-I`-isolated, cwd-in-workspace,
+  output-capped, killed-on-timeout Python subprocess, but it is honestly **not a sandbox** (approved
+  code has your OS permissions); a real WASM/OS-jail sandbox is post-v1. Read-only tools need no
+  confirmation.
+
+Tool support requires launching `llama-server` with `--jinja` (added automatically for tool-capable
+models). MCP / user-defined tool servers are a documented post-v1 extension (built-in first). See the
+`tools/` and `agent/` modules and `specs/REQUIREMENTS.md` §TOOL.
 
 ## License
 

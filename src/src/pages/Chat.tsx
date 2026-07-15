@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type MachineProfile, type RuntimeStatus, type ChatSessionSummary } from '../lib/api'
+import { Globe, Folder, Bolt, Alert, Paperclip, FileIcon } from '../components/icons'
 
-interface Msg { role: 'user' | 'assistant'; content: string; reasoning?: string }
+// A tool call shown inline in the transcript (TOOL-7). `confirm` means it's paused awaiting the
+// user's Approve/Deny for a side-effectful tool (TOOL-6).
+interface ToolCall {
+  callId: string
+  name: string
+  args: unknown
+  status: 'running' | 'confirm' | 'ok' | 'error'
+  result?: string
+}
+interface Msg { role: 'user' | 'assistant'; content: string; reasoning?: string; tools?: ToolCall[] }
 
 const g = (b: number) => (b / 1024 ** 3).toFixed(1)
 
@@ -14,6 +24,12 @@ function rel(iso: string): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
   if (s < 604800) return `${Math.floor(s / 86400)}d ago`
   return new Date(iso).toLocaleDateString()
+}
+
+// Parse a persisted tool-call trace (TOOL-7) back into cards; tolerate absent/garbled JSON.
+function parseTools(raw?: string): ToolCall[] | undefined {
+  if (!raw) return undefined
+  try { const v = JSON.parse(raw); return Array.isArray(v) && v.length ? v : undefined } catch { return undefined }
 }
 
 const DEFAULT_SYS = 'You are a precise coding assistant. Prefer minimal diffs and explain tradeoffs in one sentence.'
@@ -32,6 +48,14 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const [topP, setTopP] = useState(DEFAULT_TOP_P)
   const [maxTok, setMaxTok] = useState(DEFAULT_MAX_TOK)
 
+  // TOOL family: per-session workspace folder + Web toggle + side-effect auto-approve.
+  const [workspace, setWorkspace] = useState('')
+  const [webEnabled, setWebEnabled] = useState(false)
+  const [autoApprove, setAutoApprove] = useState(false)
+  const [wsEdit, setWsEdit] = useState(false)
+  const [staged, setStaged] = useState<{ name: string }[]>([]) // files attached but not yet sent
+  const fileInput = useRef<HTMLInputElement>(null)
+
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeTitle, setActiveTitle] = useState('New chat')
@@ -42,24 +66,23 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
   useEffect(() => { loadSessions() }, [])
 
-  // RUN-5: per-session settings (system prompt + sampling params) are part of session state, so they
-  // must persist even if the user edits them and then switches chats / starts a new one / closes the
-  // app WITHOUT sending. A latest-value ref lets us flush on those transitions without a stale closure.
-  const settingsRef = useRef({ activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId })
-  useEffect(() => { settingsRef.current = { activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId } })
+  const running = runtime?.kind === 'running'
+  const supportsTools = !!runtime?.supportsTools
+
+  // RUN-5 + TOOL: per-session settings (prompt, sampling, workspace/web/auto-approve) are session
+  // state and must persist across switches / new chat / close even without a send. A latest-value ref
+  // lets us flush on those transitions without a stale closure.
+  const settingsRef = useRef({ activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId, workspace, webEnabled, autoApprove })
+  useEffect(() => { settingsRef.current = { activeId, sys, temp, topP, maxTok, modelId: runtime?.modelId, workspace, webEnabled, autoApprove } })
   const flushSettings = () => {
     const s = settingsRef.current
-    if (s.activeId) api.updateChatSettings(s.activeId, { systemPrompt: s.sys, temperature: s.temp, topP: s.topP, maxTokens: s.maxTok, modelId: s.modelId })
+    if (s.activeId) api.updateChatSettings(s.activeId, { systemPrompt: s.sys, temperature: s.temp, topP: s.topP, maxTokens: s.maxTok, modelId: s.modelId, workspace: s.workspace || undefined, webEnabled: s.webEnabled, autoApprove: s.autoApprove })
   }
-  // Persist settings shortly after each edit (debounced), so an edit that is never followed by a
-  // send is still saved well before the window/process tears down — teardown can cancel an
-  // in-flight fetch, so we must not rely only on the unmount flush. SQLite is local, so 400ms is
-  // ample. The unmount + transition flushes remain as immediate backstops.
   useEffect(() => {
     if (!activeId) return
     const t = setTimeout(flushSettings, 400)
     return () => clearTimeout(t)
-  }, [sys, temp, topP, maxTok, activeId])
+  }, [sys, temp, topP, maxTok, workspace, webEnabled, autoApprove, activeId])
   useEffect(() => () => flushSettings(), []) // final backstop on unmount (navigating away / closing)
 
   const loadSessions = async () => {
@@ -67,7 +90,6 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     if (r.ok && r.data) setSessions(r.data)
   }
 
-  const running = runtime?.kind === 'running'
   const gpu = machine?.gpus?.[0]
   const stats = { gen: 0, eval: 0 } // live tok/s comes from the shared telemetry / benchmark
 
@@ -77,26 +99,25 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     setActiveId(null); setActiveTitle('New chat'); setMsgs([]); setInput('')
     // Reset ALL per-session settings so a fresh chat never inherits the last session's params.
     setSys(DEFAULT_SYS); setTemp(DEFAULT_TEMP); setTopP(DEFAULT_TOP_P); setMaxTok(DEFAULT_MAX_TOK)
+    setWorkspace(''); setWebEnabled(false); setAutoApprove(false); setStaged([])
     setEditingTitle(false)
   }
 
   const openSession = async (id: string) => {
-    // Switching sessions mid-stream would let the still-running loop write chunks into the newly
-    // shown transcript while the assistant reply persists to the old session. Block it while busy.
     if (busy || id === activeId) return
-    flushSettings() // save the current session's settings before loading the next one
+    flushSettings()
     const r = await api.chatSession(id)
     if (!r.ok || !r.data) return
     const d = r.data
     setActiveId(d.id); setActiveTitle(d.title)
-    // `??` not `||`: an intentionally-empty system prompt must survive reopen, not revert to default.
     setSys(d.systemPrompt ?? DEFAULT_SYS); setTemp(d.temperature); setTopP(d.topP); setMaxTok(d.maxTokens)
-    setMsgs(d.messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content, reasoning: m.reasoning })))
+    setWorkspace(d.workspace ?? ''); setWebEnabled(!!d.webEnabled); setAutoApprove(!!d.autoApprove); setStaged([])
+    setMsgs(d.messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content, reasoning: m.reasoning, tools: parseTools(m.tools) })))
     setEditingTitle(false); setInput('')
   }
 
   const removeSession = async (id: string) => {
-    if (busy) return // deleting the streaming session mid-flight would strand the in-flight append
+    if (busy) return
     await api.deleteChatSession(id)
     setConfirmDel(null)
     if (id === activeId) newChat()
@@ -111,9 +132,8 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     loadSessions()
   }
 
-  const settingsBody = () => ({ systemPrompt: sys, temperature: temp, topP, maxTokens: maxTok, modelId: runtime?.modelId })
+  const settingsBody = () => ({ systemPrompt: sys, temperature: temp, topP, maxTokens: maxTok, modelId: runtime?.modelId, workspace: workspace || undefined, webEnabled, autoApprove })
 
-  // Ensure a persisted session exists before the first message lands; auto-title from that message.
   const ensureSession = async (firstText: string): Promise<string | null> => {
     if (activeId) { await api.updateChatSettings(activeId, settingsBody()); return activeId }
     const title = firstText.trim().slice(0, 48) || 'New chat'
@@ -123,40 +143,152 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     return r.data.id
   }
 
+  // A session must exist before a file can be attached (files land in its workspace). Create a bare
+  // one if the chat hasn't started yet.
+  const ensureSessionForAttach = async (): Promise<string | null> => {
+    if (activeId) return activeId
+    const r = await api.createChatSession({ title: 'New chat', ...settingsBody() })
+    if (!r.ok || !r.data) return null
+    setActiveId(r.data.id); setActiveTitle('New chat'); loadSessions()
+    return r.data.id
+  }
+
+  const fileToBase64 = (f: File) => new Promise<string>((resolve, reject) => {
+    const rd = new FileReader()
+    rd.onerror = reject
+    rd.onload = () => { const s = String(rd.result); resolve(s.slice(s.indexOf(',') + 1)) }
+    rd.readAsDataURL(f)
+  })
+
+  const onFilesPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = '' // allow re-picking the same file
+    if (!files.length || busy) return
+    const sid = await ensureSessionForAttach()
+    if (!sid) return
+    for (const f of files) {
+      try {
+        const r = await api.attachFile(sid, f.name, await fileToBase64(f))
+        if (r.ok && r.data) setStaged(s => [...s, { name: r.data!.name }])
+        // On failure the chip simply doesn't appear (visible signal); nothing is half-attached.
+      } catch { /* skip a file that failed to read */ }
+    }
+  }
+
+  // Update the last (assistant) message immutably.
+  const patchLast = (fn: (m: Msg) => Msg) =>
+    setMsgs(m => { const cp = [...m]; cp[cp.length - 1] = fn(cp[cp.length - 1]); return cp })
+
+  // Insert or update a tool card on the current assistant message.
+  const upsertTool = (callId: string, patch: Partial<ToolCall> & { name?: string; args?: unknown }) =>
+    patchLast(m => {
+      const tools = [...(m.tools ?? [])]
+      const i = tools.findIndex(t => t.callId === callId)
+      if (i >= 0) tools[i] = { ...tools[i], ...patch }
+      else tools.push({ callId, name: patch.name ?? '', args: patch.args, status: patch.status ?? 'running', result: patch.result })
+      return { ...m, tools }
+    })
+
+  // Changing or detaching the workspace must drop auto-approve: trust is per-folder, so a new folder
+  // must never inherit a previous folder's auto-approval (it would run write_file/code unconfirmed).
+  const changeWorkspace = (v: string) => { setWorkspace(v); setAutoApprove(false) }
+
+  const decide = async (callId: string, approved: boolean) => {
+    upsertTool(callId, { status: approved ? 'running' : 'error', result: approved ? undefined : 'declined' })
+    await api.toolDecision(callId, approved)
+  }
+
   const send = async () => {
     if (!input.trim() || !running || busy) return
-    const text = input; setInput(''); setBusy(true)
+    // Note any newly-attached files so the model knows to read them from the workspace.
+    const note = staged.length ? `[Attached files in the workspace: ${staged.map(f => f.name).join(', ')}]\n\n` : ''
+    const text = note + input; setInput(''); setBusy(true)
     const history = msgs.map(m => ({ role: m.role, content: m.content }))
     setMsgs(m => [...m, { role: 'user', content: text }, { role: 'assistant', content: '' }])
-    const sid = await ensureSession(text)
+    const sid = await ensureSession(input.trim() || staged.map(f => f.name).join(', '))
     if (sid) await api.appendChatMessage(sid, { role: 'user', content: text })
+    setStaged([])
     try {
-      const port = runtime!.port
-      const resp = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ role: 'system', content: sys }, ...history, { role: 'user', content: text }], temperature: temp, top_p: topP, max_tokens: maxTok, stream: true }),
-      })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = '', buffer = ''
-      while (reader) {
-        const { done, value } = await reader.read()
-        if (value) buffer += dec.decode(value, { stream: true })
-        const lines = buffer.split('\n'); buffer = done ? '' : (lines.pop() ?? '')
-        for (const line of lines) {
-          const t = line.trim(); if (!t.startsWith('data:')) continue
-          const d = t.slice(5).trim(); if (d === '' || d === '[DONE]') continue
-          try { const j = JSON.parse(d); const c = j.choices?.[0]?.delta?.content; if (c) { acc += c; setMsgs(m => { const cp = [...m]; cp[cp.length - 1] = { role: 'assistant', content: acc }; return cp }) } } catch { /* partial */ }
+      const { text: answer, tools } = supportsTools ? await streamAgent(text, history, sid) : await streamPlain(text, history)
+      // Persist the assistant answer AND the tool-call trace (TOOL-7), so reopening the chat still
+      // shows what was approved / executed.
+      if (sid) await api.appendChatMessage(sid, { role: 'assistant', content: answer, tools: tools.length ? JSON.stringify(tools) : undefined })
+    } catch (e) {
+      patchLast(m => ({ ...m, content: (m.content || '') + '\nError: ' + ((e as Error)?.message || 'unknown') }))
+    } finally {
+      setBusy(false)
+      loadSessions()
+    }
+  }
+
+  // TOOL-1: stream the agentic loop (tokens + inline tool calls) from the server. Returns the final
+  // visible assistant text plus the tool-call trace (for persistence / audit).
+  const streamAgent = async (text: string, history: { role: string; content: string }[], sid: string | null): Promise<{ text: string; tools: ToolCall[] }> => {
+    // Local mirror of the tool cards, so we can persist the trace without racing React state.
+    const trace: ToolCall[] = []
+    const upTrace = (callId: string, patch: Partial<ToolCall> & { name?: string; args?: unknown }) => {
+      const i = trace.findIndex(t => t.callId === callId)
+      if (i >= 0) trace[i] = { ...trace[i], ...patch }
+      else trace.push({ callId, name: patch.name ?? '', args: patch.args, status: patch.status ?? 'running', result: patch.result })
+    }
+    const resp = await fetch(api.agentUrl(), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [...history, { role: 'user', content: text }],
+        systemPrompt: sys, temperature: temp, topP, maxTokens: maxTok,
+        workspace: workspace || undefined, sessionId: sid || undefined, webEnabled, autoApprove,
+      }),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = '', buffer = ''
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (value) buffer += dec.decode(value, { stream: true })
+      const lines = buffer.split('\n'); buffer = done ? '' : (lines.pop() ?? '')
+      for (const line of lines) {
+        const t = line.trim(); if (!t.startsWith('data:')) continue
+        const d = t.slice(5).trim(); if (!d) continue
+        let e: any; try { e = JSON.parse(d) } catch { continue }
+        switch (e.type) {
+          case 'token': acc += e.text || ''; patchLast(m => ({ ...m, content: acc })); break
+          case 'tool_call': upsertTool(e.callId, { name: e.name, args: e.args, status: 'running' }); upTrace(e.callId, { name: e.name, args: e.args, status: 'running' }); break
+          case 'confirm': upsertTool(e.callId, { name: e.name, args: e.args, status: 'confirm' }); upTrace(e.callId, { name: e.name, args: e.args, status: 'confirm' }); break
+          case 'tool_result': upsertTool(e.callId, { name: e.name, status: e.ok ? 'ok' : 'error', result: e.result }); upTrace(e.callId, { name: e.name, status: e.ok ? 'ok' : 'error', result: e.result }); break
+          case 'error': acc += (acc ? '\n' : '') + 'Error: ' + (e.message || 'unknown'); patchLast(m => ({ ...m, content: acc })); break
+          case 'done': break
         }
-        if (done) break
       }
-      if (sid) await api.appendChatMessage(sid, { role: 'assistant', content: acc })
-    } catch (e: any) {
-      setMsgs(m => { const cp = [...m]; cp[cp.length - 1] = { role: 'assistant', content: 'Error: ' + (e?.message || 'unknown') }; return cp })
-    } finally { setBusy(false); loadSessions() }
+      if (done) break
+    }
+    return { text: acc, tools: trace }
+  }
+
+  // Plain streaming for models without tool support — talk straight to llama-server (RUN-3).
+  const streamPlain = async (text: string, history: { role: string; content: string }[]): Promise<{ text: string; tools: ToolCall[] }> => {
+    const port = runtime!.port
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'system', content: sys }, ...history, { role: 'user', content: text }], temperature: temp, top_p: topP, max_tokens: maxTok, stream: true }),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = '', buffer = ''
+    while (reader) {
+      const { done, value } = await reader.read()
+      if (value) buffer += dec.decode(value, { stream: true })
+      const lines = buffer.split('\n'); buffer = done ? '' : (lines.pop() ?? '')
+      for (const line of lines) {
+        const t = line.trim(); if (!t.startsWith('data:')) continue
+        const d = t.slice(5).trim(); if (d === '' || d === '[DONE]') continue
+        try { const j = JSON.parse(d); const c = j.choices?.[0]?.delta?.content; if (c) { acc += c; patchLast(m => ({ ...m, content: acc })) } } catch { /* partial */ }
+      }
+      if (done) break
+    }
+    return { text: acc, tools: [] }
   }
 
   const vramUsed = gpu ? g(gpu.telemetry.vramUsedBytes) : '0'
   const gpuUtil = gpu ? gpu.telemetry.utilizationPercent.toFixed(0) : '0'
+  const wsName = workspace ? workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : ''
 
   const rail = (
     <div className={`chatsessions softscroll ${railOpen ? '' : 'hidden'} ${busy ? 'locked' : ''}`} title={busy ? 'Locked while generating' : ''}>
@@ -195,7 +327,10 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
             </div>
           </div>
           <div className="fx ac gap8">
-            <span className="tag">Streaming</span><span className="tag">Local history</span>
+            {running && (supportsTools ? <span className="tag" title="This model's chat template supports tool calling">Tools</span> : <span className="tag" style={{ opacity: 0.5 }} title="This model's template has no tool-call support">No tools</span>)}
+            {wsName && <span className="tag fx ac gap6" title={`Filesystem access scoped to ${workspace}`}><Folder size={12} /> {wsName}</span>}
+            {webEnabled && <span className="tag fx ac gap6" title="Web tools enabled for this chat"><Globe size={12} /> Web</span>}
+            <span className="tag">Local history</span>
             <button className={`sidetgl ${sideOpen ? 'on' : ''}`} onClick={() => setSideOpen(o => !o)} title="Parameters panel">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="8" x2="20" y2="8" /><circle cx="15" cy="8" r="2.4" fill="var(--paper)" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="16" r="2.4" fill="var(--paper)" /></svg>
             </button>
@@ -208,10 +343,39 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
             ? <div key={i} className="msg user"><div className="msgrole">You</div><div className="bubble">{m.content}</div></div>
             : <div key={i} className="msg"><div className="msgrole"><span className="iris">◆</span> Assistant · local</div>
                 {m.reasoning && <div className="reasoning"><div className="rlabel"><span>◇</span> Reasoning</div>{m.reasoning}</div>}
-                <div className="answer">{m.content || (busy && i === msgs.length - 1 ? <span className="faint mono" style={{ fontSize: 13 }}>generating<span style={{ animation: 'pulse 1.2s infinite' }}>▋</span></span> : '')}</div>
+                {m.tools?.map(t => <ToolCard key={t.callId} t={t} onDecide={decide} />)}
+                <div className="answer">{m.content || (busy && i === msgs.length - 1 && !(m.tools?.length) ? <span className="faint mono" style={{ fontSize: 13 }}>generating<span style={{ animation: 'pulse 1.2s infinite' }}>▋</span></span> : '')}</div>
               </div>)}
           <div ref={end} />
         </div>
+
+        {running && supportsTools && (
+          <>
+            <div className="toolbar">
+              <button className="toolchip" onClick={() => fileInput.current?.click()} disabled={busy} title={workspace ? 'Attach files (copied into the attached folder)' : 'Attach files (kept in this chat’s workspace)'}><Paperclip /> Attach files</button>
+              <input ref={fileInput} type="file" multiple hidden onChange={onFilesPicked} />
+              <button className={`toolchip ${webEnabled ? 'on' : ''}`} onClick={() => setWebEnabled(v => !v)} disabled={busy} title="Allow web search / fetch for this chat (logged; off by default)"><Globe /> Web {webEnabled ? 'on' : 'off'}</button>
+              {wsEdit || workspace
+                ? <span className="fx ac gap6">
+                    <input className="wsinput mono" placeholder="C:\path\to\folder" value={workspace} disabled={busy}
+                      onChange={e => changeWorkspace(e.target.value)} onBlur={() => setWsEdit(false)}
+                      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} autoFocus={wsEdit && !workspace} />
+                    {workspace && <button className="toolchip" onClick={() => changeWorkspace('')} disabled={busy} title="Detach folder — files go back to this chat’s workspace">✕</button>}
+                  </span>
+                : <button className="toolchip" onClick={() => setWsEdit(true)} disabled={busy} title="Scope file + code tools to a real folder (else a per-chat workspace is used)"><Folder /> Attach folder</button>}
+              <button className={`toolchip ${autoApprove ? 'on' : ''}`} onClick={() => setAutoApprove(v => !v)} disabled={busy} title="Auto-approve write_file / code for this chat (off = confirm each). Auto-workspace writes never prompt regardless."><Bolt /> Auto-approve {autoApprove ? 'on' : 'off'}</button>
+            </div>
+            {staged.length > 0 && (
+              <div className="stagedrow">
+                {staged.map((f, i) => (
+                  <span key={i} className="stagedchip mono"><FileIcon size={12} /> {f.name}
+                    <button onClick={() => setStaged(s => s.filter((_, j) => j !== i))} title="Remove from this message">✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
 
         <div className="composer">
           <div className="cbox">
@@ -246,6 +410,33 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
           <div className="mono faint" style={{ fontSize: 10.5, marginTop: 14, lineHeight: 1.5 }}>Settings save with this chat. History is stored locally · Cloud disabled · nothing leaves your machine.</div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Inline tool-call card (TOOL-7): name, arguments, and result — never hidden. Side-effect calls in
+// the `confirm` state show Approve / Deny (TOOL-6).
+function ToolCard({ t, onDecide }: { t: ToolCall; onDecide: (id: string, ok: boolean) => void }) {
+  const dot = t.status === 'ok' ? '#3fb950' : t.status === 'error' ? '#e5484d' : t.status === 'confirm' ? 'var(--iris)' : 'var(--muted)'
+  const argStr = (() => { try { return JSON.stringify(t.args) } catch { return '' } })()
+  return (
+    <div className="toolcard">
+      <div className="fx ac gap8" style={{ justifyContent: 'space-between' }}>
+        <div className="fx ac gap6">
+          <span className="tcdot" style={{ background: dot }} />
+          <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{t.name || 'tool'}</span>
+          <span className="mono faint" style={{ fontSize: 11 }}>{t.status}</span>
+        </div>
+        {t.status === 'confirm' && (
+          <span className="fx ac gap6">
+            <button className="btn btn-sm btn-iris" onClick={() => onDecide(t.callId, true)}>Approve</button>
+            <button className="btn btn-sm" onClick={() => onDecide(t.callId, false)}>Deny</button>
+          </span>
+        )}
+      </div>
+      {argStr && argStr !== '{}' && <div className="tcargs mono">{argStr}</div>}
+      {t.status === 'confirm' && <div className="tcwarn mono fx gap6"><Alert size={13} /><span>{t.name === 'code' ? 'Runs real code on your machine with your account’s permissions — this is not a sandbox.' : 'Writes to your attached folder.'} Approve only if you trust it.</span></div>}
+      {t.result != null && t.result !== '' && <div className={`tcresult mono ${t.status === 'error' ? 'err' : ''}`}>{t.result.length > 1200 ? t.result.slice(0, 1200) + ' …' : t.result}</div>}
     </div>
   )
 }

@@ -4,6 +4,9 @@ The Kayon desktop app's frontend. It renders inside the Tauri WebView2 window an
 core's local API on `127.0.0.1:9518`.
 
 - **Pages** (`src/pages/`): Dashboard, Model browser, Library, Chat, Privacy & network, Settings, Onboarding.
+  Chat drives the agentic **tool loop** for tool-capable models — a per-session Web toggle, an
+  attach-folder control (workspace scope), inline tool-call cards with Approve/Deny confirmation for
+  side effects, and a persisted, auditable tool trace (TOOL family).
 - **API client** (`src/lib/api.ts`): typed wrappers over the core's HTTP endpoints (hardware, catalog +
   live discovery status, fit verdicts, downloads + pause/resume/cancel, library, Ollama, runtime, chat
   sessions, privacy).
