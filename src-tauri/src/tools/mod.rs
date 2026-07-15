@@ -246,7 +246,7 @@ fn resolve_in_workspace(ctx: &ToolContext, rel: &str, for_write: bool) -> Result
 
 /// Resolve a path for *reading*, forgivingly. Models often mangle an attached file's long name
 /// (dropping a prefix, an en-dash, or spaces — e.g. asking for `Timeline.pdf` when the file is
-/// `Avrist Agent App – Timeline.pdf`). So if the exact path isn't found, fall back to a UNIQUE
+/// `Project Roadmap – Timeline.pdf`). So if the exact path isn't found, fall back to a UNIQUE
 /// case-insensitive match among the workspace's files by basename (exact → suffix → substring). If
 /// nothing unambiguously matches, return an error that lists the real file names so the model can
 /// retry with the right one instead of hallucinating.
@@ -1104,7 +1104,7 @@ mod tests {
     fn read_file_forgives_truncated_names() {
         let tmp = std::env::temp_dir().join(format!("kayon-fuzzy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join("Avrist Agent App – Timeline.txt"), "the real content").unwrap();
+        std::fs::write(tmp.join("Project Roadmap – Timeline.txt"), "the real content").unwrap();
         let ctx = ctx_with_ws(tmp.clone());
         // The model asks for the truncated tail; we resolve it uniquely by suffix.
         assert!(read_file(&ctx, "Timeline.txt").unwrap().contains("the real content"));
