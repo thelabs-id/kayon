@@ -97,13 +97,20 @@ pub async fn run(
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
 
-    for _iter in 0..MAX_ITERS {
+    let mut last_sig: Option<String> = None;
+    let mut force_answer = false;
+    for iter in 0..MAX_ITERS {
         // Cancellation: if the SSE receiver is gone (user navigated away / closed the chat), stop
         // before making another model call or running any tool — otherwise auto-approved side
         // effects could keep executing invisibly, violating TOOL-7 transparency.
         if tx.is_closed() {
             return;
         }
+        // Offer tools unless there are none, the model is stuck repeating a call, or this is the final
+        // allowed round. In those cases we drop `tools` so the model MUST return a text answer instead
+        // of looping into an error — weak models sometimes call the same (often nonsensical) tool
+        // forever, and the user should still get a reply, not "stopped after N iterations".
+        let with_tools = !specs.is_empty() && !force_answer && iter + 1 < MAX_ITERS;
         let mut body = json!({
             "model": "kayon",
             "messages": messages,
@@ -112,7 +119,7 @@ pub async fn run(
             "max_tokens": req.max_tokens,
             "stream": true,
         });
-        if !specs.is_empty() {
+        if with_tools {
             body["tools"] = json!(specs);
             body["tool_choice"] = json!("auto");
         }
@@ -199,12 +206,22 @@ pub async fn run(
             }
         }
 
-        // No tool calls -> this streamed message was the final answer (finish_reason "stop").
+        // No tool calls (or we didn't offer any) -> this streamed message was the final answer.
         let _ = finish;
-        if calls.is_empty() {
+        if calls.is_empty() || !with_tools {
             emit(&tx, json!({ "type": "done" })).await;
             return;
         }
+
+        // Stuck detection: if this round's tool calls are byte-identical to the previous round's, the
+        // model is looping. Do NOT execute them again — running a side-effect tool (write_file /
+        // code) a second time would defeat the guard — skip straight to a forced tool-free answer.
+        let sig = calls.iter().map(|c| format!("{}|{}", c.name, c.args)).collect::<Vec<_>>().join(";");
+        if last_sig.as_deref() == Some(sig.as_str()) {
+            force_answer = true;
+            continue;
+        }
+        last_sig = Some(sig);
 
         // Record the assistant turn (with its tool_calls) so the follow-up `tool` messages attach.
         let assistant_tool_calls: Vec<Value> = calls
@@ -281,7 +298,9 @@ pub async fn run(
         // loop: re-call the model with the tool results appended.
     }
 
-    emit(&tx, json!({ "type": "error", "message": format!("stopped after {MAX_ITERS} tool iterations") })).await;
+    // Unreachable in practice — the final iteration drops tools and returns via `done` above — but a
+    // safe terminal event if the loop ever falls through.
+    emit(&tx, json!({ "type": "done" })).await;
 }
 
 #[derive(Default)]

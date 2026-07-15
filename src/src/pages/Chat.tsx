@@ -321,7 +321,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
               {editingTitle
                 ? <input className="titleedit" autoFocus defaultValue={activeTitle}
                     onBlur={e => renameActive(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditingTitle(false) }} />
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); renameActive(e.currentTarget.value) } else if (e.key === 'Escape') setEditingTitle(false) }} />
                 : <div style={{ fontWeight: 600, fontSize: 14, cursor: activeId ? 'text' : 'default' }} title={activeId ? 'Click to rename' : ''} onClick={() => activeId && setEditingTitle(true)}>{activeTitle}</div>}
               <div className="mono faint" style={{ fontSize: 11 }}>{running ? `${runtime?.modelId} · ${runtime?.quantLabel} · :${runtime?.port}` : 'no model loaded'}</div>
             </div>
@@ -359,7 +359,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
                 ? <span className="fx ac gap6">
                     <input className="wsinput mono" placeholder="C:\path\to\folder" value={workspace} disabled={busy}
                       onChange={e => changeWorkspace(e.target.value)} onBlur={() => setWsEdit(false)}
-                      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} autoFocus={wsEdit && !workspace} />
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setWsEdit(false) } }} autoFocus={wsEdit && !workspace} />
                     {workspace && <button className="toolchip" onClick={() => changeWorkspace('')} disabled={busy} title="Detach folder — files go back to this chat’s workspace">✕</button>}
                   </span>
                 : <button className="toolchip" onClick={() => setWsEdit(true)} disabled={busy} title="Scope file + code tools to a real folder (else a per-chat workspace is used)"><Folder /> Attach folder</button>}

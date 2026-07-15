@@ -222,6 +222,13 @@ These are documented tradeoffs, not silent divergences:
   fallback) are console-subsystem executables, so on Windows they flashed a console window when
   spawned. Both are now started with `CREATE_NO_WINDOW`; their stdout/stderr are still captured, so
   logs and health checks are unaffected — the window is simply never shown.
+- **Tools + honest-fit fix (v1.3.0).** Adds the full **TOOL family** (see the Tools section above):
+  the agentic tool loop, capability detection, built-in tools, session workspace + auto-workspace +
+  attach files + artifacts, SSRF-guarded web, and the confirmation policy. Also fixes the "best pick"
+  to only crown a model that actually runs (an honest "no model fits" notice otherwise), replaces the
+  tools-UI emoji with line-art icons, makes the agent loop force a tool-free answer when a weak model
+  loops on a tool (no more "stopped after N iterations"; a repeated call executes only once), and
+  fixes Enter-to-commit on the chat-title rename.
 
 ## Tools (agentic tool calling — TOOL family)
 
