@@ -290,6 +290,17 @@ fn list_dir(ctx: &ToolContext, rel: &str) -> Result<String, String> {
 fn read_file(ctx: &ToolContext, rel: &str) -> Result<String, String> {
     use std::io::Read;
     let path = resolve_in_workspace(ctx, rel, false)?;
+
+    // A PDF is binary — reading it as UTF-8 gives the model garbage — so extract its text instead.
+    // Detect by magic bytes (authoritative) with the extension as a fallback.
+    let mut head = [0u8; 5];
+    let head_n = std::fs::File::open(&path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    let is_pdf = (head_n >= 4 && &head[..4] == b"%PDF")
+        || path.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false);
+    if is_pdf {
+        return read_pdf(&path);
+    }
+
     // Read at most MAX_READ_BYTES+1 (the +1 only tells us whether truncation happened) rather than
     // loading a multi-GB file fully into memory before slicing.
     let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -299,11 +310,54 @@ fn read_file(ctx: &ToolContext, rel: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let truncated = bytes.len() > MAX_READ_BYTES;
     let slice = &bytes[..bytes.len().min(MAX_READ_BYTES)];
+    // Binary guard: a NUL byte almost never appears in real text, and returning from_utf8_lossy of a
+    // binary blob would feed the model replacement-character garbage. Say so honestly instead.
+    if slice.contains(&0) {
+        return Err(format!(
+            "'{}' looks like a binary file ({} bytes) — read_file only returns text. PDFs are \
+             extracted; other binary formats (images, office docs, archives) are not supported.",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
+            bytes.len()
+        ));
+    }
     let mut text = String::from_utf8_lossy(slice).to_string();
     if truncated {
         text.push_str(&format!("\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"));
     }
     Ok(text)
+}
+
+/// Extract the text of a PDF so the model reads the document's words (TOOL-3, attach-files flow).
+/// PDFs must be parsed whole, so we read the entire file (bounded) rather than the byte-capped slice
+/// `read_file` uses for text. Scanned/image-only PDFs have no text layer — we say so honestly rather
+/// than returning nothing (OCR is out of scope for v1).
+fn read_pdf(path: &Path) -> Result<String, String> {
+    const MAX_PDF_BYTES: u64 = 25 * 1024 * 1024;
+    // A PDF must be parsed whole (its xref/trailer live at the end), so reject an oversized file up
+    // front rather than truncating it — a truncated PDF just fails as "malformed".
+    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if len > MAX_PDF_BYTES {
+        return Err(format!(
+            "PDF is too large ({} MB) — the limit is {} MB",
+            len / (1024 * 1024),
+            MAX_PDF_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    // pdf-extract can panic on some malformed PDFs; isolate it so a bad file can't take down the loop.
+    let extracted = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes))
+        .map_err(|_| "could not parse the PDF (it may be malformed or encrypted)".to_string())?
+        .map_err(|e| format!("PDF text extraction failed: {e}"))?;
+    let text = extracted.trim();
+    if text.is_empty() {
+        return Err("the PDF has no extractable text — it is likely a scanned image (OCR is not supported in v1)".into());
+    }
+    let truncated = text.chars().count() > MAX_READ_BYTES;
+    let mut out: String = text.chars().take(MAX_READ_BYTES).collect();
+    if truncated {
+        out.push_str("\n\n[... PDF text truncated for length ...]");
+    }
+    Ok(out)
 }
 
 fn write_file(ctx: &ToolContext, rel: &str, content: &str) -> Result<String, String> {
@@ -981,6 +1035,20 @@ mod tests {
         for p in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
             assert!(!ip_is_private(p.parse::<IpAddr>().unwrap()), "{p} should be public");
         }
+    }
+
+    #[test]
+    fn read_file_text_vs_binary() {
+        let tmp = std::env::temp_dir().join(format!("kayon-read-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("notes.txt"), "plain readable text").unwrap();
+        std::fs::write(tmp.join("blob.bin"), [0x89u8, 0x00, 0x01, b'x']).unwrap(); // has a NUL
+        let ctx = ctx_with_ws(tmp.clone());
+        assert!(read_file(&ctx, "notes.txt").unwrap().contains("plain readable text"));
+        // A binary file is refused with a message, not returned as garbage.
+        let err = read_file(&ctx, "blob.bin").unwrap_err();
+        assert!(err.contains("binary"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

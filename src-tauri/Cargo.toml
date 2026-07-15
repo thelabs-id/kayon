@@ -31,6 +31,8 @@ rand = "0.8"
 reqwest = { version = "0.12", features = ["stream", "blocking", "json"] }
 # Same URL parser reqwest uses, so the fetch_url SSRF host check can't disagree with what actually connects.
 url = "2"
+# Extract text from attached PDFs so `read_file` returns the document's words, not binary garbage.
+pdf-extract = "0.7"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 chrono = { version = "0.4", features = ["serde"] }

@@ -229,6 +229,10 @@ These are documented tradeoffs, not silent divergences:
   tools-UI emoji with line-art icons, makes the agent loop force a tool-free answer when a weak model
   loops on a tool (no more "stopped after N iterations"; a repeated call executes only once), and
   fixes Enter-to-commit on the chat-title rename.
+- **PDF reading (v1.3.1).** `read_file` now extracts a PDF's text (via `pdf-extract`) instead of
+  returning raw binary bytes, so attaching a PDF and asking the model to read/summarize it works.
+  Oversized (>25 MB) or image-only/scanned PDFs return a clear message; non-PDF binaries are refused
+  rather than fed to the model as garbage.
 
 ## Tools (agentic tool calling — TOOL family)
 
@@ -240,7 +244,8 @@ the transcript and **persisted** with the message, so saved history stays audita
 
 - **Built-in tools (TOOL-3):** `calculator` (a deterministic expression evaluator, no `eval`),
   `read_file` / `list_dir` / `write_file`, `read_selection`, a Python `code` interpreter, and web
-  `search` / `fetch_url`.
+  `search` / `fetch_url`. `read_file` **extracts text from PDFs** (so an attached PDF can be
+  summarized) and refuses other binary formats with a clear message rather than returning garbage.
 - **Session workspace + artifacts (TOOL-4):** every chat has a workspace — a folder you attach, or a
   Kayon-owned **auto-workspace** at `~/.kayon/workspace/<session>/` when you don't. The filesystem/code
   tools operate only within it (paths canonicalized; `..`, absolute paths, and symlink escapes — incl.
