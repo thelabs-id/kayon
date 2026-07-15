@@ -123,9 +123,15 @@ fn probe_gpus() -> Vec<GpuInfo> {
 fn nvidia_smi_probe() -> Vec<GpuInfo> {
     let query = "name,memory.total,memory.free,memory.used,utilization.gpu,temperature.gpu,\
                  power.draw,clocks.gr,clocks.mem,driver_version,compute_cap";
-    let output = std::process::Command::new("nvidia-smi")
-        .args([&format!("--query-gpu={}", query), "--format=csv,noheader,nounits"])
-        .output();
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args([&format!("--query-gpu={}", query), "--format=csv,noheader,nounits"]);
+    // Windows: don't flash a console window each time this fallback runs (CREATE_NO_WINDOW).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output();
     let out = match output {
         Ok(o) if o.status.success() => o.stdout,
         _ => return vec![],

@@ -216,6 +216,10 @@ These are documented tradeoffs, not silent divergences:
   the fallback only when no `Origin` is present. Covered by `csrf_check` unit tests. The UI's API
   client also no longer throws on a non-JSON/non-2xx response, so a rejected call surfaces as a
   visible error instead of a silent no-op.
+- **Hidden sidecar console (v1.2.2).** The llama.cpp `llama-server` (and the `nvidia-smi` NVML
+  fallback) are console-subsystem executables, so on Windows they flashed a console window when
+  spawned. Both are now started with `CREATE_NO_WINDOW`; their stdout/stderr are still captured, so
+  logs and health checks are unaffected — the window is simply never shown.
 
 ## License
 

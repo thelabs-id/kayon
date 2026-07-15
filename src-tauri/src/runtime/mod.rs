@@ -98,6 +98,15 @@ impl RuntimeManager {
             cmd.arg(arg);
         }
 
+        // Windows: llama-server is a console-subsystem exe, so spawning it normally pops a console
+        // window on screen. We already capture its stdout/stderr (piped + drained below), so no
+        // console is needed — CREATE_NO_WINDOW (0x08000000) starts it fully hidden.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+
         let mut child = cmd.spawn().map_err(|e| anyhow!("failed to start llama-server: {}", e))?;
         let pid = child.id();
 
