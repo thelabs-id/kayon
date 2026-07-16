@@ -140,6 +140,10 @@ auto-created `~/.kayon/workspace/<session>/`. Attach files and they're copied in
 creates land there as artifacts. The filesystem and code tools work only inside it. `..`, absolute
 paths, and symlink escapes (including a symlinked write target) are all refused.
 
+Deleting a chat deletes that chat's auto-workspace and the files in it, because a delete that looks
+final should be final. A folder you attached yourself is never removed or emptied: it's your
+directory, and Kayon only deletes what Kayon created.
+
 **Viewing artifacts and documents.** A Files panel lists the workspace, and a click opens the file in
 place: markdown, text and code, images, real PDF pages, and HTML. Two things make this different from
 a normal preview. It is fully offline, so the PDF engine and every asset it needs ship in the

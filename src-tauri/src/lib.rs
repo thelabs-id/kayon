@@ -54,6 +54,13 @@ pub fn start_api_server() {
 
     let db = Arc::new(db::Database::open().expect("failed to open database"));
     let _ = library::init_library_dir();
+    // TOOL-4: reclaim auto-workspaces whose chat is gone. Versions up to 1.4.0 deleted the rows
+    // only, so an install carries the folders — and the documents in them — of every chat the user
+    // ever deleted.
+    match sweep_orphan_workspaces(&db) {
+        0 => {}
+        n => println!("reclaimed {n} workspace(s) from deleted chats"),
+    }
     let dl = Arc::new(download::DownloadManager::new());
     let rt = Arc::new(runtime::RuntimeManager::new());
 
@@ -971,10 +978,86 @@ async fn get_chat_session(State(s): State<AppState>, Path(id): Path<String>) -> 
 }
 
 async fn delete_chat_session(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    // Read the session *before* the rows go: afterwards there is no way to tell whether the
+    // workspace was Kayon's to delete or the user's own folder.
+    let auto_owned = s
+        .db
+        .get_chat_session(&id)
+        .ok()
+        .flatten()
+        .is_some_and(|sess| sess.workspace.filter(|w| !w.trim().is_empty()).is_none());
     match s.db.delete_chat_session(&id) {
-        Ok(_) => ok_json(true).into_response(),
+        Ok(_) => {
+            // TOOL-4: the chat's artifacts and attached copies go with the chat. Only ever the
+            // Kayon-owned auto-workspace — an attached folder is the user's directory.
+            if auto_owned {
+                remove_auto_workspace(&id);
+            }
+            ok_json(true).into_response()
+        }
         Err(e) => err_json(&e.to_string()).into_response(),
     }
+}
+
+/// Delete one Kayon-owned auto-workspace (`~/.kayon/workspace/<id>/`), or do nothing.
+///
+/// Every guard here is load-bearing, because this function deletes a directory tree: the id must be
+/// a Kayon-minted uuid (never path syntax), and the canonical target must sit inside the canonical
+/// workspace root. Callers must already have established that the session had no attached folder —
+/// this cannot re-check that, since by now the row is gone.
+fn remove_auto_workspace(id: &str) {
+    if !valid_session_id(id) {
+        return;
+    }
+    let Ok(root) = kayon_home().join("workspace").canonicalize() else {
+        return; // no workspace root yet: nothing was ever created
+    };
+    let target = root.join(id);
+    let Ok(md) = std::fs::symlink_metadata(&target) else {
+        return; // never had an auto-workspace
+    };
+    // Refuse a link outright instead of deleting what it points at. Canonicalising first and
+    // deleting the *result* would follow a symlink or Windows junction straight out of the
+    // workspace — and `remove_dir_all` not following links is no help once the path is resolved.
+    if md.file_type().is_symlink() || !md.is_dir() {
+        return;
+    }
+    // Containment on the resolved path...
+    let Ok(real) = target.canonicalize() else { return };
+    if !real.starts_with(&root) || real == root {
+        return;
+    }
+    // ...but delete the unresolved one, which the check above proved is a real directory here.
+    if let Err(e) = std::fs::remove_dir_all(&target) {
+        eprintln!("could not remove auto-workspace {}: {e}", target.display());
+    }
+}
+
+/// Remove auto-workspaces whose chat no longer exists (TOOL-4).
+///
+/// Deleting a chat used to leave its folder behind, so installs carry orphans from every chat ever
+/// deleted — holding attached documents the user believed were gone. They are also unreachable:
+/// `session_workspace` requires a live session, so nothing in the app can list or open them.
+/// Returns how many were reclaimed.
+fn sweep_orphan_workspaces(db: &db::Database) -> usize {
+    let Ok(live) = db.chat_session_ids() else { return 0 };
+    let root = kayon_home().join("workspace");
+    let Ok(entries) = std::fs::read_dir(&root) else { return 0 };
+    let mut swept = 0;
+    for e in entries.filter_map(|e| e.ok()) {
+        if !e.path().is_dir() {
+            continue;
+        }
+        let Some(name) = e.file_name().to_str().map(|s| s.to_string()) else { continue };
+        // Only Kayon-shaped names, and only ones with no chat left. Anything unrecognised is left
+        // alone: an unexpected directory here is not ours to delete.
+        if !valid_session_id(&name) || live.contains(&name) {
+            continue;
+        }
+        remove_auto_workspace(&name);
+        swept += 1;
+    }
+    swept
 }
 
 #[derive(serde::Deserialize)]
@@ -1168,11 +1251,20 @@ fn session_workspace(s: &AppState, session_id: &str) -> Result<std::path::PathBu
     Ok(dir)
 }
 
-/// A session id is a uuid Kayon generated. Nothing else may reach a path join (see above).
+/// A session id is a uuid Kayon generated (`uuid::Uuid::new_v4().to_string()`), and this accepts
+/// exactly that shape: 36 chars, hex with hyphens at 8/13/18/23.
+///
+/// Strict on purpose, because this doubles as the **ownership** test for deleting an auto-workspace
+/// (TOOL-4). A looser "alphanumeric and dashes" rule would call `backup-2026` or `project1` a
+/// session id, and the sweep would recursively delete a directory a user had parked in
+/// `~/.kayon/workspace/`. Only a name Kayon could have minted is a name Kayon may remove.
 pub(crate) fn valid_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    let b = id.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 #[derive(serde::Deserialize)]
@@ -1497,6 +1589,55 @@ mod csrf_tests {
     }
 
     #[test]
+    fn auto_workspace_delete_stays_inside_the_workspace_root() {
+        // This function removes a directory tree, so the guards are the test. A user's attached
+        // folder must never be reachable from here, and neither must anything else on disk.
+        use super::remove_auto_workspace;
+        // A path-syntax id is refused before any join (belt and braces with valid_session_id).
+        for bad in ["..", ".", "../..", "a/b", ""] {
+            remove_auto_workspace(bad); // must be a no-op, not a panic and not a delete
+        }
+        // A well-formed id that has no folder is simply nothing to do.
+        remove_auto_workspace("deadbeef-0000-0000-0000-00000000ffff");
+
+        // The real thing: a folder under the workspace root, with contents, goes. The id has to be
+        // a genuine uuid shape or this test would "pass" by deleting nothing.
+        let root = super::kayon_home().join("workspace");
+        let id = format!("{:08x}-0000-4000-8000-{:012x}", std::process::id(), std::process::id());
+        assert!(valid_session_id(&id), "test id must look like one Kayon mints");
+        let dir = root.join(&id);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("artifact.md"), b"# hi").unwrap();
+        std::fs::write(dir.join("nested/deep.txt"), b"x").unwrap();
+        assert!(dir.exists());
+        remove_auto_workspace(&id);
+        assert!(!dir.exists(), "auto-workspace and its contents must be gone");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_linked_workspace_is_refused_not_followed() {
+        // A junction/symlink named like an orphan must not get its *target* deleted. Needs
+        // Developer Mode or elevation to create the link; if we can't, there is nothing to assert.
+        use super::remove_auto_workspace;
+        let root = super::kayon_home().join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let victim = std::env::temp_dir().join(format!("kayon-victim-{}", std::process::id()));
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("precious.txt"), b"do not delete").unwrap();
+
+        let id = format!("{:08x}-0000-4000-9000-{:012x}", std::process::id(), std::process::id());
+        let link = root.join(&id);
+        let _ = std::fs::remove_dir_all(&link);
+        if std::os::windows::fs::symlink_dir(&victim, &link).is_ok() {
+            remove_auto_workspace(&id);
+            assert!(victim.join("precious.txt").exists(), "must never delete through a link");
+            let _ = std::fs::remove_dir(&link);
+        }
+        std::fs::remove_dir_all(&victim).ok();
+    }
+
+    #[test]
     fn session_id_never_carries_path_syntax() {
         // Regression: `/api/chat/sessions/%2e%2e/files/kayon.db` served the whole chat database.
         // The id is joined onto `~/.kayon/workspace/`, so `..` walked up to the data root and the
@@ -1506,6 +1647,13 @@ mod csrf_tests {
             assert!(!valid_session_id(bad), "{bad:?} must never reach a path join");
         }
         assert!(!valid_session_id(&"a".repeat(65)));
+        // This also decides what the sweep may delete (TOOL-4), so a directory a user parked in
+        // ~/.kayon/workspace/ must not read as a session id just because it has dashes.
+        for not_ours in ["backup-2026", "project1", "my-notes", "713944bf6714-4fa4-b700-7927bb2f977d"] {
+            assert!(!valid_session_id(not_ours), "{not_ours:?} is not Kayon-minted; never delete it");
+        }
+        assert!(!valid_session_id("713944bf-6714-4fa4-b700-7927bb2f977"), "too short");
+        assert!(!valid_session_id("zzzzzzzz-6714-4fa4-b700-7927bb2f977d"), "not hex");
     }
 
     // Regression for v1.2.1: the Tauri desktop window loads from `tauri.localhost` and calls the

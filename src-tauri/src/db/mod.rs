@@ -288,6 +288,14 @@ impl Database {
         Ok(())
     }
 
+    /// Every live session id. Used to tell an in-use auto-workspace from an orphaned one (TOOL-4).
+    pub fn chat_session_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id FROM chat_sessions")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?)
+    }
+
     pub fn delete_chat_session(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM chat_messages WHERE session_id = ?1", params![id])?;
