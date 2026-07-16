@@ -130,7 +130,7 @@ export default function App() {
                   <span>VRAM</span><span>{vramUsed} / {vramTotal} GB</span>
                 </div>
                 <div className="mini-meter"><div className="mini-fill" style={{ width: `${vramPct}%` }} /></div>
-                <div className="mono sfoot" style={{ fontSize: 10, color: 'var(--faint)', textAlign: 'center', marginTop: 12 }}>Kayon 1.4.0 · private by construction</div>
+                <div className="mono sfoot" style={{ fontSize: 10, color: 'var(--faint)', textAlign: 'center', marginTop: 12 }}>Kayon 1.4.1 · private by construction</div>
               </div>
             </aside>
 
