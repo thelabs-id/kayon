@@ -277,4 +277,6 @@ models). MCP / user-defined tool servers are a documented post-v1 extension (bui
 
 ## License
 
-TBD.
+Kayon is released under the [MIT License](LICENSE). It bundles third-party components under their
+own permissive licenses (llama.cpp — MIT; Tauri — MIT/Apache-2.0; plus the Rust crates and fonts);
+their notices belong in a `THIRD-PARTY-NOTICES` file shipped with the app.
