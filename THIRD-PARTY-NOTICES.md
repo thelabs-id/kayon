@@ -72,6 +72,13 @@ No GPL, LGPL, or AGPL crates are present. Each crate's exact terms are in its pu
 ## Frontend dependencies (npm)
 
 - **React**, **React DOM** — MIT. <https://github.com/facebook/react>
+- **pdf.js** (`pdfjs-dist`, Mozilla) — **Apache-2.0**. <https://github.com/mozilla/pdf.js>
+  Renders PDF pages in the document viewer. Redistributed in the installer: the library, its worker,
+  and its runtime assets (`cmaps`, `standard_fonts`, `wasm`), which are copied from the package at
+  build time into `pdfjs/`. They are bundled rather than fetched so a PDF is never sent anywhere to
+  be viewed; pdf.js would otherwise default to a CDN for them.
+- **marked** — MIT. <https://github.com/markedjs/marked> Converts markdown artifacts to HTML, which
+  is then rendered inside the viewer's script-free sandbox.
 - **Vite** — MIT. <https://github.com/vitejs/vite>
 - **TypeScript** — Apache-2.0. <https://github.com/microsoft/TypeScript>
 - **@vitejs/plugin-react**, **oxlint**, **pureimage**, **@fontsource*** wrappers, `@tauri-apps/cli`,

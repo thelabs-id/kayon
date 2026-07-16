@@ -74,7 +74,9 @@ pub async fn run(
     // always have a home — the model can produce artifacts without the user attaching anything first.
     let (workspace, is_auto_workspace) = match req.workspace.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(w) => (Some(std::path::PathBuf::from(w)), false),
-        None => match req.session_id.as_ref() {
+        // The id is joined into a path, so it is validated exactly as the file routes validate it:
+        // an id like ".." would otherwise point the tools at `~/.kayon` itself.
+        None => match req.session_id.as_deref().filter(|sid| crate::valid_session_id(sid)) {
             Some(sid) => {
                 let dir = crate::kayon_home().join("workspace").join(sid);
                 let _ = std::fs::create_dir_all(&dir);

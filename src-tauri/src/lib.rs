@@ -139,6 +139,7 @@ pub fn start_api_server() {
         // Session workspace: attach files + list files (attached + model-created artifacts).
         .route("/api/chat/sessions/{id}/files", post(attach_file))
         .route("/api/chat/sessions/{id}/workspace", get(list_workspace))
+        .route("/api/chat/sessions/{id}/files/{name}", get(read_workspace_file))
         .fallback(static_handler)
         // Defence in depth against CSRF to the loopback control API: CORS blocks reading
         // responses and preflighted requests, but a malicious page can still fire "simple"
@@ -1145,15 +1146,33 @@ async fn tool_decision(State(s): State<AppState>, Json(b): Json<DecisionBody>) -
 /// the Kayon-owned auto-workspace (`~/.kayon/workspace/<id>/`), created lazily. Mirrors the agent
 /// loop's resolution so attach/list and the tools agree on where files live.
 fn session_workspace(s: &AppState, session_id: &str) -> Result<std::path::PathBuf, String> {
-    let attached = s.db.get_chat_session(session_id).ok().flatten()
-        .and_then(|sess| sess.workspace)
-        .filter(|w| !w.trim().is_empty());
-    let dir = match attached {
+    // The id lands in a filesystem path below, so treat it as hostile input rather than as a key we
+    // handed out. It is always a Kayon-minted uuid; anything else is refused before it can be joined.
+    if !valid_session_id(session_id) {
+        return Err("invalid session id".into());
+    }
+    // The session must actually exist. Missing this let a *nonexistent* id fall through to the
+    // auto-workspace branch: an id of ".." made `~/.kayon/workspace/..` resolve to `~/.kayon`, and
+    // the file routes would then happily serve `kayon.db` — the entire chat history.
+    let sess = s
+        .db
+        .get_chat_session(session_id)
+        .ok()
+        .flatten()
+        .ok_or("chat session does not exist")?;
+    let dir = match sess.workspace.filter(|w| !w.trim().is_empty()) {
         Some(w) => std::path::PathBuf::from(w),
         None => kayon_home().join("workspace").join(session_id),
     };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
+}
+
+/// A session id is a uuid Kayon generated. Nothing else may reach a path join (see above).
+pub(crate) fn valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
 }
 
 #[derive(serde::Deserialize)]
@@ -1205,6 +1224,78 @@ async fn attach_file(
     }
 }
 
+/// The Content-Type to serve a workspace file under (TOOL-8).
+///
+/// Only known-inert binary formats get their real type — those are consumed by `<img>` and the PDF
+/// renderer, neither of which executes the bytes. **Everything else is served as text/plain with
+/// nosniff, including `.html` and `.svg`.** The viewer fetches those as text and renders them in a
+/// sandboxed, opaque-origin frame; serving them as HTML from this origin would instead hand
+/// model-written JS a same-origin foothold on Kayon's own API — precisely what OD-12 rejects.
+fn view_content_type(name: &str) -> &'static str {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "pdf" => "application/pdf",
+        _ => "text/plain; charset=utf-8",
+    }
+}
+
+/// TOOL-8: serve one workspace file's bytes to the viewer, through the same scope guard the tools
+/// use. Read-only, and never an execution surface (see `view_content_type`).
+async fn read_workspace_file(
+    State(s): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    use axum::http::{header, StatusCode};
+    let dir = match session_workspace(&s, &id) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let path = match tools::resolve_in_root(&dir, &name, false) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let md = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) => return (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    };
+    if md.is_dir() {
+        return (StatusCode::BAD_REQUEST, "that is a folder".to_string()).into_response();
+    }
+    // A ceiling so one huge artifact can't wedge the UI trying to render it (TOOL-8).
+    const MAX_VIEW: u64 = 25 * 1024 * 1024;
+    if md.len() > MAX_VIEW {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("file is {:.1} MB; the viewer caps at 25 MB", md.len() as f64 / 1048576.0),
+        )
+            .into_response();
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, view_content_type(&name)),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                // An artifact is rewritten in place by the model; a cached copy would show stale bytes.
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
 /// List the files in a session's effective workspace (attached files + model-created artifacts).
 async fn list_workspace(State(s): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let dir = match session_workspace(&s, &id) {
@@ -1238,8 +1329,7 @@ async fn static_handler(
         // Serve built assets (js/css/svg) directly; SPA-fallback everything else to index.html.
         let rel = path.trim_start_matches('/');
         if !rel.is_empty() && path != "/" {
-            let asset = dist_dir.join(rel);
-            if asset.is_file() {
+            if let Some(asset) = asset_in_dist(&dist_dir, rel) {
                 let ct = content_type_for(&asset);
                 if let Ok(bytes) = std::fs::read(&asset) {
                     return (StatusCode::OK, [("content-type", ct)], bytes).into_response();
@@ -1286,6 +1376,19 @@ fn ui_dist_dir() -> std::path::PathBuf {
     catalog::crate_root().join("..").join("src").join("dist")
 }
 
+/// Resolve a request path to a file inside the built UI, or nothing.
+///
+/// The request path is attacker-controlled — anything that can reach the loopback port picks it. A
+/// bare `dist.join(rel)` is not a containment check: on Windows joining an absolute path *discards*
+/// the base, so `GET /C:/Users/you/.kayon/kayon.db` resolved to that file and served it, as did any
+/// other file the user could read. Canonicalise and require the result inside the root — the same
+/// shape as `tools::resolve_in_root`, for the same reason.
+fn asset_in_dist(dist: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
+    let root = dist.canonicalize().ok()?;
+    let real = root.join(rel).canonicalize().ok()?;
+    (real.starts_with(&root) && real.is_file()).then_some(real)
+}
+
 fn content_type_for(p: &std::path::Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("js") | Some("mjs") => "text/javascript",
@@ -1295,6 +1398,8 @@ fn content_type_for(p: &std::path::Path) -> &'static str {
         Some("json") => "application/json",
         Some("woff2") => "font/woff2",
         Some("html") => "text/html",
+        // The bundled PDF engine's wasm (TOOL-8): streaming instantiation rejects any other type.
+        Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     }
 }
@@ -1366,7 +1471,42 @@ struct ToggleReq {
 
 #[cfg(test)]
 mod csrf_tests {
-    use super::csrf_check;
+    use super::{asset_in_dist, csrf_check, valid_session_id, view_content_type};
+
+    #[test]
+    fn static_handler_serves_only_the_ui_bundle() {
+        // Regression: `GET /C:/Windows/win.ini` returned the file, because Path::join with an
+        // absolute path throws the base away — an arbitrary file read for anything that could
+        // reach the loopback port.
+        let root = std::env::temp_dir().join(format!("kayon-dist-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/app.js"), b"//ui").unwrap();
+        let outside = std::env::temp_dir().join(format!("kayon-secret-{}.txt", std::process::id()));
+        std::fs::write(&outside, b"secret").unwrap();
+
+        assert!(asset_in_dist(&root, "assets/app.js").is_some(), "real assets still serve");
+        assert!(asset_in_dist(&root, "assets/missing.js").is_none());
+        // Absolute paths (the actual exploit) and traversal are both refused.
+        assert!(asset_in_dist(&root, outside.to_str().unwrap()).is_none());
+        assert!(asset_in_dist(&root, "../../Windows/win.ini").is_none());
+        #[cfg(windows)]
+        assert!(asset_in_dist(&root, "C:\\Windows\\win.ini").is_none());
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_file(&outside).ok();
+    }
+
+    #[test]
+    fn session_id_never_carries_path_syntax() {
+        // Regression: `/api/chat/sessions/%2e%2e/files/kayon.db` served the whole chat database.
+        // The id is joined onto `~/.kayon/workspace/`, so `..` walked up to the data root and the
+        // scope guard then dutifully approved everything under it. Ids are Kayon-minted uuids.
+        assert!(valid_session_id("713944bf-6714-4fa4-b700-7927bb2f977d"));
+        for bad in ["..", ".", "../..", "a/../..", "a\\b", "C:", "", "x/y", "..%2f..", "a.b"] {
+            assert!(!valid_session_id(bad), "{bad:?} must never reach a path join");
+        }
+        assert!(!valid_session_id(&"a".repeat(65)));
+    }
 
     // Regression for v1.2.1: the Tauri desktop window loads from `tauri.localhost` and calls the
     // loopback API on 127.0.0.1:9518 — a *cross-site* request. It must be ALLOWED via its Origin,
@@ -1407,5 +1547,32 @@ mod csrf_tests {
     fn safe_methods_always_pass() {
         // GET/HEAD/OPTIONS map to mutating=false and are never gated, even from a foreign origin.
         assert!(csrf_check(false, Some("https://evil.example"), Some("cross-site")).is_ok());
+    }
+
+    #[test]
+    fn viewer_never_serves_an_executable_type() {
+        // TOOL-8 / OD-12: the whole point is that nothing served from this origin can execute.
+        // Inert binaries keep their real type (an <img>/PDF renderer won't run them)...
+        assert_eq!(view_content_type("chart.png"), "image/png");
+        assert_eq!(view_content_type("scan.PDF"), "application/pdf"); // extension match is case-insensitive
+        // ...and everything else is text, whatever it claims to be.
+        for name in ["artifact.html", "logo.svg", "notes.md", "main.rs", "app.js", "data.json", "noext"] {
+            assert_eq!(view_content_type(name), "text/plain; charset=utf-8", "{name} must not be executable");
+        }
+    }
+
+    #[test]
+    fn viewer_refuses_escapes_through_the_shared_guard() {
+        let root = std::env::temp_dir().join(format!("kayon-view-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("ok.txt"), b"hi").unwrap();
+        let real = crate::tools::resolve_in_root(&root, "ok.txt", false).unwrap();
+        assert!(real.ends_with("ok.txt"));
+        // Traversal out of the workspace, and absolute paths, are refused — same guard as the tools.
+        assert!(crate::tools::resolve_in_root(&root, "../../secret.txt", false).is_err());
+        assert!(crate::tools::resolve_in_root(&root, "sub/../../../secret.txt", false).is_err());
+        #[cfg(windows)]
+        assert!(crate::tools::resolve_in_root(&root, "C:\\Windows\\win.ini", false).is_err());
+        std::fs::remove_dir_all(&root).ok();
     }
 }

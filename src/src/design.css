@@ -232,6 +232,34 @@
 .statline{display:flex;gap:16px;font-family:'Geist Mono Variable',monospace;font-size:11px;color:var(--faint)}
 .statline b{color:var(--iris);font-weight:500}
 .chatside{width:280px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:20px}
+
+/* TOOL-8 — artifact & document viewer. Wider than the params rail: this panel has to show a PDF
+   page or a rendered artifact, not a column of sliders. */
+.chatfiles{width:520px;flex:none;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.viewer{display:flex;flex-direction:column;height:100%;min-height:0}
+.vhead{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);flex:none}
+.vname{font-size:13px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vkind{font-size:10px;color:var(--faint);border:1px solid var(--line2);border-radius:4px;padding:1px 5px;flex:none;text-transform:uppercase;letter-spacing:.04em}
+.vgap{flex:1}
+.vsub{font-size:10.5px;padding:8px 14px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none}
+.vbody{flex:1;min-height:0;display:flex;flex-direction:column}
+.vscroll{flex:1;min-height:0;overflow:auto;padding:14px}
+.vframe{flex:1;min-height:0;width:100%;border:0;background:var(--paper)}
+.vtext{margin:0;font-size:12px;line-height:1.6;color:var(--ink);white-space:pre-wrap;word-break:break-word}
+.vimg{max-width:100%;display:block;margin:0 auto;background:#fff;border-radius:6px}
+.vmsg{display:flex;align-items:center;gap:7px;padding:14px;font-size:12.5px;color:var(--muted)}
+.vlist{flex:1;min-height:0;overflow-y:auto;padding:10px}
+.vitem{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:var(--ink);cursor:pointer;text-align:left;font-size:12.5px}
+.vitem:hover:not(:disabled){background:var(--paper)}
+.vitem:disabled{cursor:default;opacity:.55}
+.vitemname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vitemsize{font-size:10.5px;flex:none}
+/* A refused outside request is stated, never dropped silently (OD-12). */
+.vblocked{display:flex;gap:9px;margin:10px 14px 0;padding:10px 12px;border:1px solid var(--v-tight);border-radius:8px;background:color-mix(in oklab,var(--v-tight) 10%,transparent);font-size:11.5px;line-height:1.5;color:var(--ink);flex:none}
+.vblocklist{margin:6px 0 0;padding-left:16px;font-size:10.5px;color:var(--muted);max-height:76px;overflow-y:auto}
+.vpdf{flex:1;min-height:0;display:flex;flex-direction:column}
+.vbar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);flex:none}
+.vcanvas{display:block;margin:0 auto;background:#fff;box-shadow:0 2px 14px rgba(0,0,0,.13);border-radius:3px}
 .field{margin-bottom:18px}
 .flabel{font-family:'Geist Mono Variable',monospace;font-size:11px;letter-spacing:.05em;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:7px}
 .ftext{width:100%;background:var(--paper);border:1px solid var(--line2);border-radius:7px;padding:9px 11px;color:var(--ink);font-family:'Geist Variable',sans-serif;font-size:13px;resize:vertical;min-height:70px;outline:none}

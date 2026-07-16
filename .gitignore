@@ -38,3 +38,6 @@ Thumbs.db
 /design/
 /AGENTS.md
 /CLAUDE.md
+
+# Vendored at build time from node_modules (TOOL-8 offline PDF assets)
+/src/public/pdfjs/

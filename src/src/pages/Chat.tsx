@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type MachineProfile, type RuntimeStatus, type ChatSessionSummary } from '../lib/api'
 import { Globe, Folder, Bolt, Alert, Paperclip, FileIcon, Caret } from '../components/icons'
+import Viewer from '../components/Viewer'
 
 // A tool call shown inline in the transcript (TOOL-7). `confirm` means it's paused awaiting the
 // user's Approve/Deny for a side-effectful tool (TOOL-6).
@@ -14,6 +15,13 @@ interface ToolCall {
 interface Msg { role: 'user' | 'assistant'; content: string; reasoning?: string; tools?: ToolCall[] }
 
 const g = (b: number) => (b / 1024 ** 3).toFixed(1)
+
+// File sizes in the workspace panel, where entries run from a few bytes to tens of MB.
+function fmtBytes(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 ** 2) return `${(b / 1024).toFixed(0)} KB`
+  return `${(b / 1024 ** 2).toFixed(1)} MB`
+}
 
 // Compact relative time for the session list.
 function rel(iso: string): string {
@@ -70,6 +78,11 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const [autoApprove, setAutoApprove] = useState(false)
   const [wsEdit, setWsEdit] = useState(false)
   const [staged, setStaged] = useState<{ name: string }[]>([]) // files attached but not yet sent
+  // TOOL-8: the workspace as seen by the viewer — attached documents and model-made artifacts alike.
+  const [files, setFiles] = useState<{ name: string; bytes: number; isDir: boolean }[]>([])
+  const [wsAuto, setWsAuto] = useState(true)
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [viewing, setViewing] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
@@ -127,6 +140,15 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     if (r.ok && r.data) setSessions(r.data)
   }
 
+  // TOOL-8. Takes the session explicitly: callers often know it before `activeId` has re-rendered.
+  const loadFiles = async (sid: string | null = activeId) => {
+    if (!sid) { setFiles([]); return }
+    const r = await api.listWorkspace(sid)
+    if (r.ok && r.data) { setFiles(r.data.files); setWsAuto(r.data.auto) }
+  }
+  // Follow whichever chat is open, and re-read after a turn (the model may have written artifacts).
+  useEffect(() => { loadFiles(activeId) }, [activeId])
+
   const gpu = machine?.gpus?.[0]
   const stats = { gen: 0, eval: 0 } // live tok/s comes from the shared telemetry / benchmark
 
@@ -140,6 +162,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     setSys(DEFAULT_SYS); setTemp(DEFAULT_TEMP); setTopP(DEFAULT_TOP_P); setMaxTok(DEFAULT_MAX_TOK)
     setWorkspace(''); setWebEnabled(false); setAutoApprove(false); setStaged([])
     setEditingTitle(false)
+    setViewing(null) // never leave one chat's artifact open over another chat
   }
 
   const openSession = async (id: string) => {
@@ -153,6 +176,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     setWorkspace(d.workspace ?? ''); setWebEnabled(!!d.webEnabled); setAutoApprove(!!d.autoApprove); setStaged([])
     setMsgs(d.messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content, reasoning: m.reasoning, tools: parseTools(m.tools) })))
     setEditingTitle(false); setInput('')
+    setViewing(null) // a file open from the previous chat is not in this one's workspace
   }
 
   const removeSession = async (id: string) => {
@@ -212,6 +236,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
         // On failure the chip simply doesn't appear (visible signal); nothing is half-attached.
       } catch { /* skip a file that failed to read */ }
     }
+    loadFiles(sid) // an attached document is viewable immediately, before any turn (TOOL-8)
   }
 
   // Update the last (assistant) message immutably.
@@ -275,6 +300,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
       } catch { /* nothing more we can do; the transcript still shows the turn */ }
       setBusy(false)
       loadSessions()
+      loadFiles(sid) // a write_file this turn should show up without a manual refresh (TOOL-8)
     }
   }
 
@@ -385,6 +411,13 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
             {wsName && <span className="tag fx ac gap6" title={`Filesystem access scoped to ${workspace}`}><Folder size={12} /> {wsName}</span>}
             {webEnabled && <span className="tag fx ac gap6" title="Web tools enabled for this chat"><Globe size={12} /> Web</span>}
             <span className="tag">Local history</span>
+            {activeId && (
+              <button className={`toolchip ${filesOpen ? 'on' : ''}`} style={{ padding: '4px 9px' }}
+                onClick={() => setFilesOpen(o => !o)}
+                title="Attached documents and model-made artifacts in this chat’s workspace">
+                <FileIcon size={12} /> Files{files.length ? ` ${files.length}` : ''}
+              </button>
+            )}
             <button className={`sidetgl ${sideOpen ? 'on' : ''}`} onClick={() => setSideOpen(o => !o)} title="Parameters panel">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="8" x2="20" y2="8" /><circle cx="15" cy="8" r="2.4" fill="var(--paper)" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="16" r="2.4" fill="var(--paper)" /></svg>
             </button>
@@ -447,6 +480,35 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
           </div>
         </div>
       </div>
+
+      {filesOpen && activeId && (
+        <div className="chatfiles">
+          {viewing
+            ? <Viewer sessionId={activeId} name={viewing} onClose={() => setViewing(null)} />
+            : (
+              <>
+                <div className="vhead">
+                  <Folder size={13} />
+                  <span className="vname">Files</span>
+                  <span className="vgap" />
+                  <button className="btn btn-line btn-sm" onClick={() => loadFiles()}>Refresh</button>
+                  <button className="btn btn-line btn-sm" onClick={() => setFilesOpen(false)}>Close</button>
+                </div>
+                <div className="vsub faint mono">{wsAuto ? "this chat’s workspace" : workspace}</div>
+                <div className="vlist softscroll">
+                  {files.length === 0 && <div className="vmsg faint">Nothing here yet. Attach a file, or ask the model to write one.</div>}
+                  {files.map(f => (
+                    <button key={f.name} className="vitem" disabled={f.isDir} onClick={() => setViewing(f.name)} title={f.isDir ? 'folder' : `Open ${f.name}`}>
+                      {f.isDir ? <Folder size={13} /> : <FileIcon size={13} />}
+                      <span className="vitemname">{f.name}</span>
+                      <span className="vitemsize mono faint">{f.isDir ? 'folder' : fmtBytes(f.bytes)}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+        </div>
+      )}
 
       {sideOpen && (
         <div className="chatside softscroll">

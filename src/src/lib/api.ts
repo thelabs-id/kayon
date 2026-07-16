@@ -390,4 +390,8 @@ export const api = {
   // List files in the session workspace (attached files + model-created artifacts).
   listWorkspace: (sessionId: string) =>
     apiFetch<ApiResponse<{ auto: boolean; files: { name: string; bytes: number; isDir: boolean }[] }>>(`/api/chat/sessions/${sessionId}/workspace`),
+  // TOOL-8: raw bytes of one workspace file, for the viewer. A URL rather than a fetch helper
+  // because <img>/<a download> consume it directly. Served read-only through the scope guard.
+  workspaceFileUrl: (sessionId: string, name: string) =>
+    `${BASE}/api/chat/sessions/${sessionId}/files/${encodeURIComponent(name)}`,
 }

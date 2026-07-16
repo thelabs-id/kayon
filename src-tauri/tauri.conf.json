@@ -23,12 +23,14 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:9518 http://localhost:9518 http://127.0.0.1:* ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:9518 http://localhost:9518 http://127.0.0.1:* ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,7 +43,7 @@
       "binaries/llama/*"
     ],
     "externalBin": [],
-    "longDescription": "Kayon turns a Windows + NVIDIA machine into an honest, private, local LLM workstation: real fit verdicts, adopt-in-place from Ollama, and a managed llama.cpp runtime — no account, no cloud.",
+    "longDescription": "Kayon turns a Windows + NVIDIA machine into an honest, private, local LLM workstation: real fit verdicts, adopt-in-place from Ollama, and a managed llama.cpp runtime \u00e2\u20ac\u201d no account, no cloud.",
     "shortDescription": "Honest, private, local LLM workstation.",
     "windows": {
       "nsis": {

@@ -140,6 +140,18 @@ auto-created `~/.kayon/workspace/<session>/`. Attach files and they're copied in
 creates land there as artifacts. The filesystem and code tools work only inside it. `..`, absolute
 paths, and symlink escapes (including a symlinked write target) are all refused.
 
+**Viewing artifacts and documents.** A Files panel lists the workspace, and a click opens the file in
+place: markdown, text and code, images, real PDF pages, and HTML. Two things make this different from
+a normal preview. It is fully offline, so the PDF engine and every asset it needs ship in the
+installer and a document is never sent anywhere to be looked at. And it never executes an artifact:
+HTML renders in a frame with an opaque origin, no network, and no scripts. That last part is a
+deliberate trade. A content policy stops a page from fetching, but nothing stops a script from
+navigating itself to `https://somewhere/?your=data`, and a navigation is not a fetch, so no policy
+catches it. Running an artifact's JavaScript and promising no silent network are mutually exclusive
+here, and the promise wins. So a chart or React artifact renders as static markup, the viewer says on
+the artifact which scripts it refused to run and which remote URLs it will not load, and Save a copy
+lets you run it in a browser you trust.
+
 **Web is opt-in, per session.** A Web toggle, off by default, gates `search` and `fetch_url`.
 DuckDuckGo is the default provider: no key, no account, straight from your machine, and every query
 lands in the network log. `fetch_url` is SSRF-guarded. The host is parsed with the same parser the HTTP

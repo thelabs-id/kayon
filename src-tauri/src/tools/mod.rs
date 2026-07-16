@@ -197,6 +197,13 @@ const WEB_FETCH_MAX_CHARS: usize = 8000;
 /// file may not exist yet, so we canonicalize its parent and re-join the file name.
 fn resolve_in_workspace(ctx: &ToolContext, rel: &str, for_write: bool) -> Result<PathBuf, String> {
     let ws = ctx.workspace.as_ref().ok_or("no workspace folder is attached to this chat")?;
+    resolve_in_root(ws, rel, for_write)
+}
+
+/// The scope guard itself, against an explicit root. Public so the artifact viewer (TOOL-8) serves
+/// bytes through the *same* check the tools use — a second resolver would be a second chance to get
+/// symlink and `..` handling wrong.
+pub fn resolve_in_root(ws: &Path, rel: &str, for_write: bool) -> Result<PathBuf, String> {
     let root = ws
         .canonicalize()
         .map_err(|e| format!("workspace folder is unavailable: {e}"))?;
