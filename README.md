@@ -10,7 +10,8 @@ links (zero bytes re-downloaded), and runs everything locally through a managed 
 with local chat that saves your conversations as sessions, and no account, no cloud, and no
 telemetry unless you opt in.
 
-`specs/REQUIREMENTS.md` is the single source of truth; `specs/IMPLEMENTATION.md` is the build plan.
+Kayon is honest about what your hardware can run, adopts what you already have, and keeps everything
+on your machine unless you explicitly opt in.
 
 ## Three differentiators
 
@@ -61,7 +62,6 @@ src-tauri/            Rust core
     bin/catgen.rs     catalog generator (auto-discovery) (CAT-6/CAT-7)
   catalog/            bundled catalog.json + .sig
 src/                  React + TypeScript UI (Vite)
-specs/                REQUIREMENTS.md (SSOT) + IMPLEMENTATION.md
 ```
 
 ## Desktop app (Tauri) — download, install, run
@@ -273,7 +273,7 @@ the transcript and **persisted** with the message, so saved history stays audita
 
 Tool support requires launching `llama-server` with `--jinja` (added automatically for tool-capable
 models). MCP / user-defined tool servers are a documented post-v1 extension (built-in first). See the
-`tools/` and `agent/` modules and `specs/REQUIREMENTS.md` §TOOL.
+`tools/` and `agent/` modules.
 
 ## License
 

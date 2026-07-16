@@ -32,3 +32,9 @@ Thumbs.db
 
 # Codex review build cache
 /src-tauri/target-review/
+
+# theLabs IP — kept local only, never pushed
+/specs/
+/design/
+/AGENTS.md
+/CLAUDE.md
