@@ -418,7 +418,9 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
 // Inline tool-call card (TOOL-7): name, arguments, and result — never hidden. Side-effect calls in
 // the `confirm` state show Approve / Deny (TOOL-6).
 function ToolCard({ t, onDecide }: { t: ToolCall; onDecide: (id: string, ok: boolean) => void }) {
-  const [open, setOpen] = useState(true)
+  // Collapsed by default: the answer should lead, with the call's detail a click away. The header
+  // still carries the name, status and a result preview, so the call is never hidden outright.
+  const [open, setOpen] = useState(false)
   // A call awaiting approval must stay open: its args and the warning are what you're deciding on.
   const pending = t.status === 'confirm'
   const expanded = pending || open
