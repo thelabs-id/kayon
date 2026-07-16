@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Kayon">
+  <title>Kayon</title>
+  <!-- The kayon (gunungan) — the Tree-of-Life figure the dalang plants center-screen to frame the play. -->
+  <path d="M32 7 C23 18 18 24 18 34 C18 45 24 51 32 57 C40 51 46 45 46 34 C46 24 41 18 32 7 Z"
+        fill="none" stroke="#C0553A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="32" y1="15" x2="32" y2="49"
+        stroke="#C0553A" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="32" cy="31" r="4" fill="#E0916B"/>
+</svg>

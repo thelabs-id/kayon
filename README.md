@@ -1,305 +1,305 @@
+<div align="center">
+
+<img src="docs/assets/logo.svg" width="84" alt="Kayon">
+
 # Kayon
 
 **An honest, private, local-LLM workstation for Windows + NVIDIA.**
 
-Kayon detects your hardware, tells you the *truth* about which models actually fit (a real
-memory model — weights + KV cache + compute buffers + display headroom, never `file_size < VRAM`),
-discovers an always-current catalog live from Hugging Face, and manages checksum-verified downloads
-with pause / resume / cancel controls. It adopts your existing Ollama models in place via NTFS hard
-links (zero bytes re-downloaded), and runs everything locally through a managed llama.cpp runtime —
-with local chat that saves your conversations as sessions, and no account, no cloud, and no
-telemetry unless you opt in.
+[![Download](https://img.shields.io/github/v/release/thelabs-id/kayon?label=Download&color=C0553A&style=flat-square)](https://github.com/thelabs-id/kayon/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-4FA97C?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/Windows%2010%2F11-x64-6E665A?style=flat-square)](https://github.com/thelabs-id/kayon/releases/latest)
+[![Built with Rust](https://img.shields.io/badge/Rust-C0553A?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Tauri 2](https://img.shields.io/badge/Tauri%202-E0916B?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+
+Most local-LLM apps decide what "fits" your GPU by comparing a file size to your VRAM. That's a lie —
+it ignores the KV cache, compute buffers, and the memory your display already took. **Kayon does the
+real arithmetic**, tells you the truth per quant, and runs everything on your machine: no account, no
+cloud, no telemetry unless you turn it on.
+
+**[⬇ Download for Windows](https://github.com/thelabs-id/kayon/releases/latest)**
+
+<img src="docs/assets/model-browser.png" width="100%" alt="Kayon's model browser showing honest per-quant fit verdicts computed from real free VRAM">
+
+</div>
+
+---
+
+## Why Kayon
+
+### 1. Honest fit — not `file_size < VRAM`
+
+Every quant of every model gets a verdict computed for **your** GPU at **your** chosen context length,
+from a real memory model — **weights + KV cache + compute buffers + display headroom** vs. actual free
+VRAM:
+
+| Verdict | Meaning |
+|---|---|
+| `FITS_FULLY` | Runs entirely on the GPU, comfortably |
+| `FITS_TIGHT` | Fits, but with little headroom |
+| `GPU_CPU_SPLIT` | Partially offloaded — runs, slower |
+| `CPU_ONLY` | Won't fit on the GPU; fits in RAM |
+| `EXCEEDS_MACHINE` | Won't run here |
+| `UNVERIFIED_ARCH` | Non-standard attention (SSM/linear/hybrid) — **honestly unverifiable** rather than a fabricated number |
+
+Expand any quant for the full breakdown. When **nothing** fits, Kayon says so plainly instead of
+crowning a model that can't run.
+
+### 2. Adopt your Ollama models in place — zero bytes re-downloaded
+
+Kayon finds your Ollama store and **hard-links** the blobs into its library: no copy, no re-download.
+It records Ollama's blob digest as the checksum for free, and flags models whose architecture needs a
+newer runtime. Deleting Kayon's link never touches Ollama's blob.
+
+### 3. Private by construction
+
+No account. No cloud. Telemetry is **off by default** — and when you do enable it, you see the
+**literal payload** before anything is sent. Every outbound request in the whole app funnels through
+one instrumented choke point and lands in a **network log** you can read.
+
+---
 
 ## Download
 
-### **[⬇ Get the latest release](https://github.com/thelabs-id/kayon/releases/latest)** — `Kayon_<version>_x64-setup.exe`
+**[⬇ Get the latest release](https://github.com/thelabs-id/kayon/releases/latest)** →
+`Kayon_<version>_x64-setup.exe`
 
-Run the installer, then launch **Kayon** from the Start menu. The llama.cpp CUDA runtime is
-**bundled**, so chat and the benchmark work out of the box — no separate download, no env vars, no
-Python. Nothing is sent anywhere: no account, no cloud, no telemetry unless you opt in.
+Run the installer and launch **Kayon** from the Start menu. The llama.cpp CUDA runtime is **bundled** —
+chat and the benchmark work out of the box. No separate download, no env vars, no Python.
 
 **Requirements**
 
 - Windows 10/11 x64
-- An NVIDIA GPU + driver for GPU inference — *optional*: without one Kayon still runs and gives you
+- An NVIDIA GPU + driver for GPU inference — *optional*: without one, Kayon still runs and gives you
   honest RAM-based verdicts instead of pretending
-- Optional: [Ollama](https://ollama.com), if you want Kayon to adopt models you already have (in
-  place, via hard links — zero bytes re-downloaded)
+- Optional: [Ollama](https://ollama.com), to adopt models you already have
 
-> **Heads-up:** the installer isn't code-signed yet, so Windows SmartScreen will warn
-> *"Windows protected your PC."* Click **More info → Run anyway** to install. Code signing is on the
-> roadmap.
+> [!NOTE]
+> The installer isn't code-signed yet, so Windows SmartScreen will warn *"Windows protected your PC."*
+> Click **More info → Run anyway**. Code signing is on the roadmap.
 
-**Upgrading?** Just run the newer installer over your existing install — your library, chat history,
-and settings are preserved.
+**Upgrading?** Run the newer installer over your existing install — library, chat history, and settings
+are preserved.
 
-## Three differentiators
+---
 
-1. **Honest fit** — per-quant verdicts (`FITS_FULLY` / `FITS_TIGHT` / `GPU_CPU_SPLIT` / `CPU_ONLY` /
-   `EXCEEDS_MACHINE` / `UNVERIFIED_ARCH`) computed for *your* GPU at a chosen context length, with a
-   full explainability breakdown. Non-standard-attention architectures (SSM/linear/hybrid) honestly
-   return `UNVERIFIED_ARCH` rather than a fabricated number.
-2. **Adopt-in-place from Ollama** — discover your Ollama store, hard-link blobs into the library
-   (zero copy), record the blob digest as the checksum for free, and flag models whose architecture
-   needs a newer runtime. Deleting Kayon's link never touches Ollama's blob.
-3. **Private by construction** — no account, off-by-default telemetry with a literal-payload preview,
-   and a network log that accounts for every outbound request at the single egress choke point.
+## Screenshots
+
+<table>
+<tr>
+<td width="50%">
+
+**Instrument cluster** — your hardware, measured directly from NVML at 1 Hz. Not guessed.
+
+<img src="docs/assets/dashboard.png" alt="Kayon dashboard showing GPU, VRAM, CPU and RAM telemetry">
+
+</td>
+<td width="50%">
+
+**Chat with tools** — local chat with an agentic tool loop. Every tool call is shown inline.
+
+<img src="docs/assets/chat-tools.png" alt="Kayon chat showing an inline calculator tool call and its result">
+
+</td>
+</tr>
+</table>
+
+---
+
+## Features
+
+- **Fit engine** — per-quant verdicts with a full explainability breakdown, at any context length,
+  with an f16 / q8_0 KV-cache toggle.
+- **Live catalog** — discovered from Hugging Face at launch, every quant's real SHA-256 and byte size
+  pinned straight from Git-LFS metadata (no multi-GB download to learn a hash). Stays current with zero
+  hand-editing.
+- **Checksum-gated downloads** — resumable, with **pause / resume / cancel**. Nothing enters your
+  library without matching its pinned hash.
+- **Ollama adoption** — hard-linked, zero-copy, with a cross-volume copy fallback.
+- **Managed runtime** — llama.cpp `llama-server` (CUDA) supervised as a sidecar, launched with the
+  exact `n_gpu_layers` / context the verdict promised.
+- **Local chat with sessions** — conversations saved in local SQLite; reopen and continue any of them.
+  Each session keeps its own system prompt and sampling params.
+- **Agentic tools** — see [Tools](#tools) below.
+- **Privacy surface** — a network log accounting for every outbound request, and telemetry that shows
+  you its payload before sending.
+
+---
+
+## Tools
+
+When a loaded model's GGUF chat template actually supports tool calling (**detected at load, never
+guessed**), Chat offers a built-in, vetted tool set through a server-side **agent loop**: the model's
+tool calls run locally, results feed back, and the loop continues until a final answer. Every call —
+name, arguments, result — is rendered **inline** and **persisted** with the message, so saved history
+stays auditable.
+
+- **Built-in tools** — `calculator` (a deterministic evaluator, no `eval`), `read_file` / `list_dir` /
+  `write_file`, `read_selection`, a Python `code` interpreter, and web `search` / `fetch_url`.
+  `read_file` **extracts text from PDFs**, refuses other binaries with a clear message instead of
+  feeding the model garbage, and forgives a truncated/approximate filename.
+- **Session workspace + artifacts** — every chat has a workspace: a folder you attach, or an
+  auto-created `~/.kayon/workspace/<session>/`. **Attach files** and they're copied in; model-created
+  files land there as artifacts. Filesystem/code tools operate **only** within it — `..`, absolute
+  paths, and symlink escapes (including a symlinked write target) are refused.
+- **Web is opt-in, per session** — a **Web toggle**, off by default, gates `search` / `fetch_url`.
+  DuckDuckGo by default (no key, no account, straight from your machine), and every query lands in the
+  network log. `fetch_url` is **SSRF-guarded**: the host is parsed with the same parser the HTTP client
+  uses, resolved, and refused if loopback/private/link-local; the vetted IP is pinned (no DNS-rebind)
+  and every redirect hop is re-checked.
+- **Side effects are confirmation-gated** — `code` **always** asks per call; `write_file` asks only
+  when writing into a folder *you* attached (auto-workspace artifacts flow through). An off-by-default
+  auto-approve overrides it.
+
+> [!IMPORTANT]
+> **The confirmation is the security boundary.** The `code` tool runs an isolated-mode,
+> cwd-in-workspace, output-capped, killed-on-timeout Python subprocess — but it is honestly **not a
+> sandbox**: approved code runs with your OS permissions. A real WASM/OS-jail sandbox is a post-v1
+> goal. Approve only what you trust.
+
+MCP / user-defined tool servers are a planned extension (built-in set first).
+
+---
 
 ## Architecture
 
 | Layer | Tech |
 |---|---|
-| Core | Rust — NVML probe, GGUF reader, §7 fit engine, resumable/checksummed downloads, SQLite (`rusqlite`), ed25519 catalog verification, llama-server supervisor |
-| UI | React + TypeScript (Vite) — dashboard, model browser, library, chat, settings, first-run |
-| Runtime | Prebuilt llama.cpp `llama-server` (CUDA) as a sidecar, driven over its OpenAI-compatible HTTP API |
-| Catalog | ed25519-signed JSON, generated by a build-time CLI (`catgen`) |
+| **Core** | Rust — NVML probe, GGUF reader, the fit engine, resumable/checksummed downloads, SQLite (`rusqlite`), ed25519 catalog verification, llama-server supervisor |
+| **Shell** | Tauri 2 — a native WebView2 window over the Rust core |
+| **UI** | React + TypeScript (Vite) — dashboard, model browser, library, chat, privacy, settings |
+| **Runtime** | Prebuilt llama.cpp `llama-server` (CUDA) as a sidecar, driven over its OpenAI-compatible HTTP API |
+| **Catalog** | Live from Hugging Face, checksum-pinned; an ed25519-signed catalog is bundled as the offline anchor |
 
-> **Shell note.** The spec targets a Tauri 2 shell. This build runs the identical Rust core behind a
-> local Axum HTTP server that also serves the React UI, so the whole app is drivable in a browser for
-> automated end-to-end testing. The IPC surface and core modules are unchanged; swapping the transport
-> to Tauri commands is a mechanical follow-up (see *Known deltas*).
+The app launches its local API on `127.0.0.1:9518` on a background thread and renders the UI in the
+window — no browser required. The same API also serves the UI standalone, which is how the app is
+driven in automated end-to-end tests.
 
-## Repository layout
+<details>
+<summary><b>Repository layout</b></summary>
 
 ```
 src-tauri/            Rust core
   src/
-    probe/            NVML + system telemetry            (HW)
-    gguf/             GGUF header reader                 (FIT, CAT)
-    fit/              the §7 fit engine                  (FIT)
-    catalog/          bundled anchor · verify · parse    (CAT)
-    discovery/        live HF catalog discovery          (CAT-7)
-    download/         resumable, checksummed             (DL)
-    library/          index · deterministic paths        (LIB)
-    ollama/           discover · adopt (hard link)       (OLL)
-    runtime/          llama-server sidecar supervisor    (RUN)
-    tools/            built-in tool set + executor       (TOOL)
-    agent/            server-side agentic tool loop      (TOOL)
-    telemetry/        opt-in gate + outbound net log     (PRIV)
-    db/               SQLite (rusqlite)                  (cross-cutting)
-    ipc/              typed command/response contract    (cross-cutting)
-    bin/catsign.rs    sign the bundled catalog (CAT-5)
-    bin/catgen.rs     catalog generator (auto-discovery) (CAT-6/CAT-7)
+    probe/            NVML + system telemetry
+    gguf/             GGUF header reader
+    fit/              the fit engine
+    catalog/          bundled anchor · verify · parse
+    discovery/        live Hugging Face catalog discovery
+    download/         resumable, checksummed
+    library/          index · deterministic paths
+    ollama/           discover · adopt (hard link)
+    runtime/          llama-server sidecar supervisor
+    tools/            built-in tool set + executor
+    agent/            server-side agentic tool loop
+    telemetry/        opt-in gate + outbound network log
+    db/               SQLite (rusqlite)
+    ipc/              typed command/response contract
+    bin/catgen.rs     catalog generator (auto-discovery)
+    bin/catsign.rs    sign the bundled catalog
   catalog/            bundled catalog.json + .sig
 src/                  React + TypeScript UI (Vite)
 ```
 
-## Build the desktop app from source
+</details>
 
-> Just want to *use* Kayon? Grab the installer from [Download](#download) above — this section is for
-> building it yourself.
+---
 
-Kayon ships as a **Tauri 2 Windows desktop app**: a native WebView2 window over the Rust core.
-The app launches its local API server on `127.0.0.1:9518` on a background thread and shows the UI
-in the window — no browser required.
+## Building from source
 
-**Build the installer:**
+> Just want to *use* Kayon? Grab the [installer](#download) — this section is for building it yourself.
+
+**Prerequisites:** Windows 10/11 x64 · Rust (stable) · Node.js 18+ · a llama.cpp `llama-server.exe`
+(CUDA build recommended) · optionally an NVIDIA GPU + driver, and Ollama.
 
 ```bash
-cd src && npm install && npm run build          # build the UI once
+# Build the installer
+cd src && npm install && npm run build     # build the UI once
 cd ..
-src/node_modules/.bin/tauri build               # run from the repo root
-# → src-tauri/target/release/bundle/nsis/Kayon_<version>_x64-setup.exe  (version from tauri.conf.json)
+src/node_modules/.bin/tauri build          # → src-tauri/target/release/bundle/nsis/Kayon_<version>_x64-setup.exe
 ```
-
-Run the installer, then launch **Kayon** from the Start menu. It installs per-machine to
-`Program Files\Kayon`. For development, `tauri dev` runs the window against the Vite dev server;
-`cargo run --bin kayon` runs the built app; `cargo run --bin server` runs just the API + UI on
-`127.0.0.1:9518` for browser-based testing.
-
-> **llama-server sidecar.** The **installer bundles** the llama.cpp `llama-server.exe` (CUDA) as a
-> Tauri resource, so chat and the benchmark work out of the box — no env var, no manual setup. When
-> **building from source**, the CUDA binary isn't committed (large artifact), so place it under
-> `src-tauri/binaries/llama/` before `tauri build`, or point `KAYON_LLAMA_SERVER` at it for
-> `cargo run`. The resolver checks the bundled resource path, the portable/dev paths, the env var,
-> and finally `PATH`.
-
-## Prerequisites
-
-- Windows 10/11 x64
-- Rust (stable) and Node.js 18+
-- For real inference: a llama.cpp `llama-server.exe` (CUDA build recommended on NVIDIA)
-- Optional: an NVIDIA GPU + driver (NVML). Without one, Kayon degrades gracefully to RAM-based verdicts.
-- Optional: Ollama, to adopt existing models.
-
-## Build & run (dev)
 
 ```bash
-# 1. Build the frontend (served by the Rust binary)
-cd src
-npm install
-npm run build
-
-# 2. Build & run the core (serves API + UI on http://127.0.0.1:9518)
-cd ../src-tauri
-cargo run --bin kayon
+# Or run it in development
+cd src && npm install && npm run build
+cd ../src-tauri && cargo run --bin kayon   # the desktop window
+# cargo run --bin server                   # just the API + UI on http://127.0.0.1:9518
 ```
 
-Then open <http://127.0.0.1:9518>.
+For hot-reload UI work, run `npm run dev` in `src/` (Vite on :3000, proxying `/api` to :9518).
 
-For hot-reload UI development, run `npm run dev` in `src/` (Vite on :3000, proxies `/api` to :9518).
+> [!NOTE]
+> **llama-server sidecar.** The *installer* bundles `llama-server.exe` (CUDA) as a Tauri resource, so
+> it works out of the box. When *building from source* the CUDA binary isn't committed (large
+> artifact) — place it under `src-tauri/binaries/llama/` before `tauri build`, or point
+> `KAYON_LLAMA_SERVER` at it. The resolver checks: env var → bundled resource → dev path → `PATH`.
 
-### Cross-volume Ollama adoption
-
-Hard links can't span drives. If your Ollama store is on a different volume than Kayon's library
-(`~/.kayon/models`), adoption offers a **copy** (with a disk pre-flight). To keep it zero-copy,
-relocate the library onto the Ollama drive first — move `~/.kayon/models` there and point Kayon at
-the new location — then adopt so future adoptions hard-link.
-
-### Pointing at a llama-server binary
-
-The runtime resolves the binary in this order: the `KAYON_LLAMA_SERVER` environment variable, then a
-bundled `src-tauri/binaries/llama-server.exe`, then `llama-server.exe` on `PATH`.
+**Tests**
 
 ```bash
-# PowerShell
-$env:KAYON_LLAMA_SERVER = "C:\path\to\llama-server.exe"
-cargo run --bin kayon
+cd src-tauri && cargo test    # fit golden cases, catalog signature/tamper, tool scoping, SSRF guard
 ```
 
-## Catalog tooling
+<details>
+<summary><b>Catalog tooling</b></summary>
 
-The model catalog is **discovered live from Hugging Face at runtime** (CAT-7), not hand-curated and not
-fetched from any Kayon-hosted file. On launch (in the background) Kayon queries the most-downloaded GGUF
-models by a trusted allow-list of quantizers (default: `bartowski`), pins each real checksum + byte size
-straight from HF's Git-LFS metadata (the LFS `oid` *is* the SHA-256 — no multi-GB download), and derives
-the `arch` block from a range-fetched header. Results are cached to `~/.kayon/catalog/discovered.json`
-and reused as an arch cache, so steady-state launches make only small JSON calls. The list stays current
-with zero hand-editing and no GitHub round-trip. See `src-tauri/src/discovery/`.
+The catalog is **discovered live from Hugging Face at runtime** — not hand-curated, and not fetched
+from any Kayon-hosted file. On launch (in the background) Kayon queries the most-downloaded GGUF models
+from a trusted allow-list of quantizers (default: `bartowski`), pins each real checksum + byte size
+straight from HF's Git-LFS metadata (the LFS `oid` *is* the SHA-256), and derives the architecture from
+a range-fetched header. Results cache to `~/.kayon/catalog/discovered.json`.
 
-A signed catalog is still **bundled** in the binary as the offline anchor (works before the first
-discovery / with discovery off) and is generated by the same discovery code path via `catgen`:
+A signed catalog is still **bundled** as the offline anchor, generated by the same code path:
 
 ```bash
-# Regenerate + sign the bundled offline-anchor catalog from Hugging Face
-cargo run --bin catgen -- auto [per_author] [author,author,...]
-# Print the baked-in verifying key (paste into catalog/mod.rs after rotating the seed)
-cargo run --bin catsign -- pubkey
-# Sign the bundled catalog -> catalog/catalog.json.sig
-cargo run --bin catsign -- sign
-# Or generate + sign from a hand-written manifest (catalog.source.json)
-cargo run --bin catgen -- manifest catalog/catalog.source.json
+cargo run --bin catgen -- auto [per_author] [author,...]   # regenerate the bundled anchor from HF
+cargo run --bin catsign -- pubkey                          # print the baked-in verifying key
+cargo run --bin catsign -- sign                            # sign → catalog/catalog.json.sig
 ```
 
-Runtime discovery is a normal, logged network call (PRIV-1/PRIV-5) and is independently controllable —
-set the `catalog_auto_refresh` preference to `off` to disable it and stay on the bundled/cached catalog.
+Discovery is a normal, logged network call and is independently controllable — set the
+`catalog_auto_refresh` preference to `off` to stay on the bundled/cached catalog.
 
-**Trust note:** runtime-discovered entries are pinned to HF's published hash and enforced by the download
-checksum gate (DL-3), but are *not* Kayon-signed like the bundled anchor. Since HF is already the download
-origin, this keeps trust to a single party; it is a deliberate, documented relaxation (CAT-7).
+**Trust note:** runtime-discovered entries are pinned to Hugging Face's published hash and enforced by
+the download checksum gate, but are *not* Kayon-signed like the bundled anchor. Since HF is already the
+download origin, this keeps trust to a single party — a deliberate, documented tradeoff.
 
-## Tests
+</details>
 
-```bash
-cd src-tauri && cargo test      # fit golden cases + catalog signature/tamper tests
-```
+---
 
-## Known deltas from the spec
+## Design notes & honest tradeoffs
 
-These are documented tradeoffs, not silent divergences:
+Documented decisions, not silent divergences:
 
-- **Desktop shell is Tauri 2**, matching OD-9. The Rust core runs the local API server behind the
-  native window; a `server` bin exposes the same API on `127.0.0.1:9518` for browser-based
-  automated testing (which is how the UI was verified).
-- **Chat is a hand-rolled streaming client**, not the assistant-ui + Vercel AI SDK library (OD-3).
-  The UI **layout** matches the design's chat exactly (reasoning display, code blocks, live stat
-  line, parameters panel) and streams over the OpenAI-compatible endpoint. assistant-ui is a React
-  library and runs in the Tauri WebView2 window unchanged; wiring it in for its message-branching /
-  tool-calling primitives under this same visual skin is a UI-layer follow-up.
-- **Chat sessions persist locally (RUN-5).** Conversations are stored in local SQLite as named
-  sessions — start a new chat or reopen any prior one and continue it (the stored transcript is
-  replayed as the model's context). Each session keeps its own system prompt + sampling params;
-  sessions list most-recent-first, auto-title from the first message (renamable), and delete with a
-  two-step confirm. History is local-only (no cloud, no telemetry). Summarized long-term memory and
-  cross-chat recall are a documented post-v1 extension, not in this build.
-- **The catalog is discovered live from Hugging Face at runtime, fully pinned** — every quant's real
-  SHA-256 + byte size come from HF's LFS metadata, so every entry downloads and checksum-verifies end
-  to end (no placeholder checksums). The tradeoff vs. CAT-6's human-PR-review gate *and* the CAT-5
-  author-signature is deliberate and documented in CAT-7: discovered entries are pinned to HF's hash
-  (checksum gate intact) but not Kayon-signed; the bundled catalog stays signed as the offline anchor.
-  Curation-judgment fields (`capabilities`, `runtimeArgs`) are left at conservative defaults rather than
-  guessed. Discovery honestly skips anything it can't identify or that exceeds the v1 single-GPU ceiling.
-- **The catalog signing key is not in source.** `catsign` reads it from `KAYON_CATALOG_SEED` (env) or a
-  gitignored `catalog/signing.key`, and the verifying key is baked into the binary. Rotating means
-  re-running `catsign pubkey` (bake it) then `catsign sign`. In production the private key belongs in
-  a secret store / HSM, never the repo.
-- **Fit constants** (`cuda_overhead`, `compute_buffer`, headroom, comfort margin) ship at the §7
-  conservative defaults; Phase-3 on-device calibration via the HW-5 benchmark is the follow-up.
-- **Model-browser download UX (v1.2.0).** Installs show a live progress bar (percent / bytes / speed /
-  ETA) inline on the card with **pause / resume / cancel** controls — pause keeps the partial file and
-  resume continues from the on-disk offset via an HTTP Range request (same mechanism as the DL-1 restart
-  resume); progress survives navigating away and back. "In library" is derived from the actual library
-  (not a stale download row), so a deleted model is immediately re-installable. While launch-time catalog
-  discovery (CAT-7) runs, the browser shows a "finding the best models…" indicator and transparently
-  reloads when the newer catalog lands. Removing a downloaded model is the Library's two-step delete.
-- **Desktop CSRF-guard fix (v1.2.1).** The loopback control API's CSRF guard rejected any mutating
-  request whose `Sec-Fetch-Site` was `cross-site` — but the Tauri window loads from `tauri.localhost`
-  and calls the API on `127.0.0.1:9518`, which *is* cross-site, so every write (load, download,
-  pause/resume/cancel, adopt, delete, settings) was silently 403'd in the installed app while reads
-  still worked. The guard now treats the (unspoofable) `Origin` allow-list as authoritative — the
-  desktop window and served UI pass, a foreign origin is still rejected, and `Sec-Fetch-Site` remains
-  the fallback only when no `Origin` is present. Covered by `csrf_check` unit tests. The UI's API
-  client also no longer throws on a non-JSON/non-2xx response, so a rejected call surfaces as a
-  visible error instead of a silent no-op.
-- **Hidden sidecar console (v1.2.2).** The llama.cpp `llama-server` (and the `nvidia-smi` NVML
-  fallback) are console-subsystem executables, so on Windows they flashed a console window when
-  spawned. Both are now started with `CREATE_NO_WINDOW`; their stdout/stderr are still captured, so
-  logs and health checks are unaffected — the window is simply never shown.
-- **Tools + honest-fit fix (v1.3.0).** Adds the full **TOOL family** (see the Tools section above):
-  the agentic tool loop, capability detection, built-in tools, session workspace + auto-workspace +
-  attach files + artifacts, SSRF-guarded web, and the confirmation policy. Also fixes the "best pick"
-  to only crown a model that actually runs (an honest "no model fits" notice otherwise), replaces the
-  tools-UI emoji with line-art icons, makes the agent loop force a tool-free answer when a weak model
-  loops on a tool (no more "stopped after N iterations"; a repeated call executes only once), and
-  fixes Enter-to-commit on the chat-title rename.
-- **PDF reading (v1.3.1).** `read_file` now extracts a PDF's text (via `pdf-extract`) instead of
-  returning raw binary bytes, so attaching a PDF and asking the model to read/summarize it works.
-  Oversized (>25 MB) or image-only/scanned PDFs return a clear message; non-PDF binaries are refused
-  rather than fed to the model as garbage.
-- **Forgiving filenames (v1.3.2).** Models often truncate a long attached filename (dropping a
-  prefix, an en-dash, or spaces — asking for `Timeline.pdf` when the file is
-  `Project Roadmap – Timeline.pdf`). `read_file` now resolves a **unique** case-insensitive
-  basename match (exact → suffix → substring) — re-validated through the workspace scope guard, so
-  a symlink can't escape — and, on a miss, returns the actual file names so the model retries with
-  the right one instead of hallucinating. The attach note also quotes the exact names.
+- **Code execution is not sandboxed (v1).** It's confirmation-gated, isolated-mode, cwd-scoped, and
+  killed on timeout — but approved code has your OS permissions. Said plainly in the UI rather than
+  dressed up as isolation. A WASM/OS-jail sandbox is the post-v1 hardening.
+- **Discovered catalog entries aren't Kayon-signed** — they're pinned to Hugging Face's hash and
+  enforced by the checksum gate. The bundled anchor stays signed.
+- **The catalog signing key is not in source** — it comes from `KAYON_CATALOG_SEED` or a gitignored
+  key file; the verifying key is baked into the binary. In production it belongs in a secret store.
+- **Fit constants** (CUDA overhead, compute buffer, headroom) ship at conservative defaults;
+  on-device calibration via the benchmark is a follow-up.
+- **Chat is a hand-rolled streaming client** over the OpenAI-compatible endpoint, not a chat library.
+- **Tool-call traces are persisted per message**; summarized long-term memory and cross-chat recall
+  are not in this build.
+- **Windows + NVIDIA only** in v1 — no macOS/AMD, no multi-GPU offload, no multimodal, no serving.
 
-## Tools (agentic tool calling — TOOL family)
+**Changelog:** see the [Releases](https://github.com/thelabs-id/kayon/releases) page.
 
-When a loaded model's GGUF chat template supports tool calling (detected at load, never guessed —
-TOOL-2), Chat offers a built-in, Kayon-vetted tool set through a server-side **agent loop**: the
-model's `tool_calls` are executed locally, results are fed back, and the loop continues (bounded
-iterations) until a final answer. Every call — name, arguments, result — is rendered **inline** in
-the transcript and **persisted** with the message, so saved history stays auditable (TOOL-7).
-
-- **Built-in tools (TOOL-3):** `calculator` (a deterministic expression evaluator, no `eval`),
-  `read_file` / `list_dir` / `write_file`, `read_selection`, a Python `code` interpreter, and web
-  `search` / `fetch_url`. `read_file` **extracts text from PDFs** (so an attached PDF can be
-  summarized) and refuses other binary formats with a clear message rather than returning garbage.
-- **Session workspace + artifacts (TOOL-4):** every chat has a workspace — a folder you attach, or a
-  Kayon-owned **auto-workspace** at `~/.kayon/workspace/<session>/` when you don't. The filesystem/code
-  tools operate only within it (paths canonicalized; `..`, absolute paths, and symlink escapes — incl.
-  a symlinked write target — refused). You can **attach files** (📎) which are copied into the
-  workspace so the model can `read_file` them, and model-created files land there as artifacts.
-- **Web is opt-in per session (TOOL-5):** a chat **Web toggle**, off by default, gates `search` /
-  `fetch_url`. The default provider is **DuckDuckGo** (no key, no account, direct from the machine),
-  and every query/URL is recorded in the network log (PRIV-5). `fetch_url` is **SSRF-guarded**: the
-  host is parsed with the same URL parser reqwest uses, resolved, and refused if it is
-  loopback/private/link-local; the vetted IP is pinned for the connection (no DNS-rebind) and every
-  redirect hop is re-checked and logged.
-- **Side effects are confirmation-gated (TOOL-6):** `code` **always** requires per-call Approve/Deny;
-  `write_file` requires it only into an **attached** folder — writes into the auto-workspace flow
-  through so artifacts appear without a click (an off-by-default auto-approve overrides). **The
-  confirmation is the security boundary** — v1 `code` runs a `-I`-isolated, cwd-in-workspace,
-  output-capped, killed-on-timeout Python subprocess, but it is honestly **not a sandbox** (approved
-  code has your OS permissions); a real WASM/OS-jail sandbox is post-v1. Read-only tools need no
-  confirmation.
-
-Tool support requires launching `llama-server` with `--jinja` (added automatically for tool-capable
-models). MCP / user-defined tool servers are a documented post-v1 extension (built-in first). See the
-`tools/` and `agent/` modules.
+---
 
 ## License
 
-Kayon is released under the [MIT License](LICENSE). It bundles third-party components under their
-own permissive licenses (llama.cpp — MIT; Tauri — MIT/Apache-2.0; plus the Rust crates and fonts);
-their notices belong in a `THIRD-PARTY-NOTICES` file shipped with the app.
+Kayon is released under the **[MIT License](LICENSE)**.
+
+It bundles third-party components under their own permissive licenses — llama.cpp (MIT), Tauri
+(MIT/Apache-2.0), the Rust crates, and the fonts. See **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**.
+
+Model weights are **not** bundled: Kayon downloads models at your request and verifies them against a
+pinned checksum. Each model carries its own license from its source.
+
+<div align="center">
+<sub><i>Kayon</i> — the Tree-of-Life figure a dalang plants center-screen to frame the world of the play.</sub>
+</div>
