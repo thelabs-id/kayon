@@ -10,8 +10,28 @@ links (zero bytes re-downloaded), and runs everything locally through a managed 
 with local chat that saves your conversations as sessions, and no account, no cloud, and no
 telemetry unless you opt in.
 
-Kayon is honest about what your hardware can run, adopts what you already have, and keeps everything
-on your machine unless you explicitly opt in.
+## Download
+
+### **[⬇ Get the latest release](https://github.com/thelabs-id/kayon/releases/latest)** — `Kayon_<version>_x64-setup.exe`
+
+Run the installer, then launch **Kayon** from the Start menu. The llama.cpp CUDA runtime is
+**bundled**, so chat and the benchmark work out of the box — no separate download, no env vars, no
+Python. Nothing is sent anywhere: no account, no cloud, no telemetry unless you opt in.
+
+**Requirements**
+
+- Windows 10/11 x64
+- An NVIDIA GPU + driver for GPU inference — *optional*: without one Kayon still runs and gives you
+  honest RAM-based verdicts instead of pretending
+- Optional: [Ollama](https://ollama.com), if you want Kayon to adopt models you already have (in
+  place, via hard links — zero bytes re-downloaded)
+
+> **Heads-up:** the installer isn't code-signed yet, so Windows SmartScreen will warn
+> *"Windows protected your PC."* Click **More info → Run anyway** to install. Code signing is on the
+> roadmap.
+
+**Upgrading?** Just run the newer installer over your existing install — your library, chat history,
+and settings are preserved.
 
 ## Three differentiators
 
@@ -64,7 +84,10 @@ src-tauri/            Rust core
 src/                  React + TypeScript UI (Vite)
 ```
 
-## Desktop app (Tauri) — download, install, run
+## Build the desktop app from source
+
+> Just want to *use* Kayon? Grab the installer from [Download](#download) above — this section is for
+> building it yourself.
 
 Kayon ships as a **Tauri 2 Windows desktop app**: a native WebView2 window over the Rust core.
 The app launches its local API server on `127.0.0.1:9518` on a background thread and shows the UI
