@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type MachineProfile, type RuntimeStatus, type ChatSessionSummary } from '../lib/api'
-import { Globe, Folder, Bolt, Alert, Paperclip, FileIcon } from '../components/icons'
+import { Globe, Folder, Bolt, Alert, Paperclip, FileIcon, Caret } from '../components/icons'
 
 // A tool call shown inline in the transcript (TOOL-7). `confirm` means it's paused awaiting the
 // user's Approve/Deny for a side-effectful tool (TOOL-6).
@@ -418,26 +418,39 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
 // Inline tool-call card (TOOL-7): name, arguments, and result — never hidden. Side-effect calls in
 // the `confirm` state show Approve / Deny (TOOL-6).
 function ToolCard({ t, onDecide }: { t: ToolCall; onDecide: (id: string, ok: boolean) => void }) {
-  const dot = t.status === 'ok' ? '#3fb950' : t.status === 'error' ? '#e5484d' : t.status === 'confirm' ? 'var(--iris)' : 'var(--muted)'
+  const [open, setOpen] = useState(true)
+  // A call awaiting approval must stay open: its args and the warning are what you're deciding on.
+  const pending = t.status === 'confirm'
+  const expanded = pending || open
+  const dot = t.status === 'ok' ? '#3fb950' : t.status === 'error' ? '#e5484d' : pending ? 'var(--iris)' : 'var(--muted)'
   const argStr = (() => { try { return JSON.stringify(t.args) } catch { return '' } })()
+  // Collapsed cards still say what happened, so nothing is hidden outright.
+  const peek = (t.result ?? '').replace(/\s+/g, ' ').trim()
   return (
     <div className="toolcard">
-      <div className="fx ac gap8" style={{ justifyContent: 'space-between' }}>
-        <div className="fx ac gap6">
+      <div className="tchead">
+        <button type="button" className="tctoggle" onClick={() => setOpen(o => !o)} disabled={pending}
+          aria-expanded={expanded} title={expanded ? 'Collapse' : 'Expand'}>
+          <Caret open={expanded} />
           <span className="tcdot" style={{ background: dot }} />
-          <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{t.name || 'tool'}</span>
-          <span className="mono faint" style={{ fontSize: 11 }}>{t.status}</span>
-        </div>
-        {t.status === 'confirm' && (
+          <span className="tcname mono">{t.name || 'tool'}</span>
+          <span className="tcstatus mono">{t.status}</span>
+          {!expanded && peek && <span className="tcpeek mono">{peek.length > 60 ? peek.slice(0, 60) + '…' : peek}</span>}
+        </button>
+        {pending && (
           <span className="fx ac gap6">
             <button className="btn btn-sm btn-iris" onClick={() => onDecide(t.callId, true)}>Approve</button>
             <button className="btn btn-sm" onClick={() => onDecide(t.callId, false)}>Deny</button>
           </span>
         )}
       </div>
-      {argStr && argStr !== '{}' && <div className="tcargs mono">{argStr}</div>}
-      {t.status === 'confirm' && <div className="tcwarn mono fx gap6"><Alert size={13} /><span>{t.name === 'code' ? 'Runs real code on your machine with your account’s permissions — this is not a sandbox.' : 'Writes to your attached folder.'} Approve only if you trust it.</span></div>}
-      {t.result != null && t.result !== '' && <div className={`tcresult mono ${t.status === 'error' ? 'err' : ''}`}>{t.result.length > 1200 ? t.result.slice(0, 1200) + ' …' : t.result}</div>}
+      {expanded && (
+        <>
+          {argStr && argStr !== '{}' && <div className="tcargs mono">{argStr}</div>}
+          {pending && <div className="tcwarn mono fx gap6"><Alert size={13} /><span>{t.name === 'code' ? 'Runs real code on your machine with your account’s permissions. This is not a sandbox.' : 'Writes to your attached folder.'} Approve only if you trust it.</span></div>}
+          {t.result != null && t.result !== '' && <div className={`tcresult mono ${t.status === 'error' ? 'err' : ''}`}>{t.result.length > 1200 ? t.result.slice(0, 1200) + ' …' : t.result}</div>}
+        </>
+      )}
     </div>
   )
 }

@@ -57,6 +57,14 @@ export const Bolt = ({ size }: { size?: number }) => (
 export const Alert = ({ size }: { size?: number }) => (
   <Glyph size={size}><path d="M12 3.5l9 15.5H3z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="16.7" x2="12" y2="16.8" /></Glyph>
 )
+/** Disclosure caret. Points right when collapsed, down when open. */
+export const Caret = ({ size = 12, open }: { size?: number; open?: boolean }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2.5"
+    strokeLinecap="round" strokeLinejoin="round"
+    style={{ flex: 'none', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>
+    <path d="M9 6l6 6-6 6" />
+  </svg>
+)
 export const Paperclip = ({ size }: { size?: number }) => (
   <Glyph size={size}><path d="M21.4 11l-9.2 9.2a5 5 0 0 1-7-7l9.2-9.2a3.3 3.3 0 0 1 4.7 4.7l-9.2 9.2a1.7 1.7 0 0 1-2.3-2.3l8.5-8.5" /></Glyph>
 )

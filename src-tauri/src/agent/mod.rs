@@ -23,6 +23,13 @@ pub type Decisions = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 
 const MAX_ITERS: usize = 8;
 const CONFIRM_TIMEOUT_SECS: u64 = 300;
+
+/// Appended to the system prompt whenever tools are advertised. Without it, small models tend to
+/// describe the tool call and its JSON shape rather than use the result to answer.
+const TOOL_GUIDE: &str = "You have tools available. Call a tool only when it genuinely helps. \
+When a tool returns a result, answer the user's original question directly using that result. \
+State the answer plainly. Do not describe the tool, its arguments, the JSON, or the result format, \
+and do not explain that you called a function.";
 /// Safety cap on the tool-result text appended to the conversation before the next model call. Any
 /// single tool (a large file, a web page) is truncated here so it can never overflow the model's
 /// context in one step — the tool's own caps are tighter, this is the last-line guard.
@@ -85,10 +92,20 @@ pub async fn run(
     };
     let specs = tools::tool_specs(supports_tools, &ctx);
 
-    // Build the running OpenAI message array, starting with the system prompt.
+    // Build the running OpenAI message array, starting with the system prompt. When tools are on the
+    // table, append guidance on what to DO with a result: smaller models otherwise narrate the
+    // mechanism ("this JSON call to the calculator function returns...") instead of answering the
+    // question the user actually asked.
+    let mut system = req.system_prompt.trim().to_string();
+    if !specs.is_empty() {
+        if !system.is_empty() {
+            system.push_str("\n\n");
+        }
+        system.push_str(TOOL_GUIDE);
+    }
     let mut messages: Vec<Value> = Vec::new();
-    if !req.system_prompt.trim().is_empty() {
-        messages.push(json!({ "role": "system", "content": req.system_prompt }));
+    if !system.is_empty() {
+        messages.push(json!({ "role": "system", "content": system }));
     }
     for (role, content) in &req.messages {
         messages.push(json!({ "role": role, "content": content }));
