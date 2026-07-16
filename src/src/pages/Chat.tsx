@@ -32,6 +32,22 @@ function parseTools(raw?: string): ToolCall[] | undefined {
   try { const v = JSON.parse(raw); return Array.isArray(v) && v.length ? v : undefined } catch { return undefined }
 }
 
+// A turn's accumulated output. The caller owns it so a stream that throws mid-flight still yields
+// whatever ran before the failure — tools may already have touched the machine by then.
+interface Turn { text: string; tools: ToolCall[] }
+
+// Close out calls left mid-flight by a broken stream. Their server-side decision channel is gone, so
+// a `confirm` card restored from history would offer an Approve button that resolves nothing.
+function sealTools(tools: ToolCall[]): ToolCall[] {
+  return tools.map(t =>
+    t.status === 'running' || t.status === 'confirm'
+      ? { ...t, status: 'error' as const, result: t.result ?? 'interrupted' }
+      : t)
+}
+
+// Which chat was last open, so a reload returns to it instead of a blank composer.
+const LAST_SESSION_KEY = 'kayon.chat.lastSession'
+
 const DEFAULT_SYS = 'You are a precise coding assistant. Prefer minimal diffs and explain tradeoffs in one sentence.'
 const DEFAULT_TEMP = 0.7
 const DEFAULT_TOP_P = 0.95
@@ -64,7 +80,28 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const end = useRef<HTMLDivElement>(null)
 
   useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
-  useEffect(() => { loadSessions() }, [])
+
+  // Reopen the chat that was last open, falling back to the most recent one, so a reload lands back
+  // in the conversation rather than on a blank composer. Read at first render, before the effect
+  // below can clear it.
+  const bootId = useRef<string | null>(localStorage.getItem(LAST_SESSION_KEY))
+  const bootCancelled = useRef(false)
+  useEffect(() => {
+    (async () => {
+      const r = await api.chatSessions()
+      if (!r.ok || !r.data) return
+      setSessions(r.data)
+      // Anyone who picked a view while this was in flight (New chat, or opening a chat from the
+      // list) has said what they want; a late restore must not yank them back to the old session.
+      if (bootCancelled.current || settingsRef.current.activeId) return
+      const want = r.data.some(s => s.id === bootId.current) ? bootId.current : r.data[0]?.id
+      if (want) openSession(want)
+    })()
+  }, [])
+
+  // Only ever write a real id here. Clearing on null would race the boot restore above, which runs
+  // while activeId is still null.
+  useEffect(() => { if (activeId) localStorage.setItem(LAST_SESSION_KEY, activeId) }, [activeId])
 
   const running = runtime?.kind === 'running'
   const supportsTools = !!runtime?.supportsTools
@@ -96,6 +133,8 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
   const newChat = () => {
     if (busy) return // don't reset the view out from under an in-flight stream
     flushSettings() // save the outgoing session's settings before clearing them
+    bootCancelled.current = true // a blank composer is now a deliberate choice, not a cold start
+    localStorage.removeItem(LAST_SESSION_KEY) // nothing is open now; don't point at the old chat
     setActiveId(null); setActiveTitle('New chat'); setMsgs([]); setInput('')
     // Reset ALL per-session settings so a fresh chat never inherits the last session's params.
     setSys(DEFAULT_SYS); setTemp(DEFAULT_TEMP); setTopP(DEFAULT_TOP_P); setMaxTok(DEFAULT_MAX_TOK)
@@ -209,24 +248,40 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
     const sid = await ensureSession(input.trim() || staged.map(f => f.name).join(', '))
     if (sid) await api.appendChatMessage(sid, { role: 'user', content: text })
     setStaged([])
+    const out: Turn = { text: '', tools: [] }
     try {
-      const { text: answer, tools } = supportsTools ? await streamAgent(text, history, sid) : await streamPlain(text, history)
-      // Persist the assistant answer AND the tool-call trace (TOOL-7), so reopening the chat still
-      // shows what was approved / executed.
-      if (sid) await api.appendChatMessage(sid, { role: 'assistant', content: answer, tools: tools.length ? JSON.stringify(tools) : undefined })
+      if (supportsTools) await streamAgent(text, history, sid, out)
+      else await streamPlain(text, history, out)
     } catch (e) {
-      patchLast(m => ({ ...m, content: (m.content || '') + '\nError: ' + ((e as Error)?.message || 'unknown') }))
+      // A failed turn still gets recorded below: by the time a stream breaks, code may have run and
+      // files may have been written, and an audit trail that drops exactly the turns that went wrong
+      // is the one you needed most (TOOL-7).
+      out.tools = sealTools(out.tools)
+      out.text = (out.text ? out.text + '\n' : '') + 'Error: ' + ((e as Error)?.message || 'unknown')
+      patchLast(m => ({ ...m, content: out.text, tools: out.tools.length ? out.tools : undefined }))
     } finally {
+      // Persist the answer AND the tool-call trace (TOOL-7), so reopening the chat still shows what
+      // was approved / executed. Skip only a turn that produced nothing at all to record.
+      // A failing write must not escape: the turn is already on screen, and throwing here would skip
+      // the unbusy below and wedge the composer for the rest of the session.
+      try {
+        if (sid && (out.text || out.tools.length)) {
+          await api.appendChatMessage(sid, {
+            role: 'assistant',
+            content: out.text,
+            tools: out.tools.length ? JSON.stringify(out.tools) : undefined,
+          })
+        }
+      } catch { /* nothing more we can do; the transcript still shows the turn */ }
       setBusy(false)
       loadSessions()
     }
   }
 
-  // TOOL-1: stream the agentic loop (tokens + inline tool calls) from the server. Returns the final
-  // visible assistant text plus the tool-call trace (for persistence / audit).
-  const streamAgent = async (text: string, history: { role: string; content: string }[], sid: string | null): Promise<{ text: string; tools: ToolCall[] }> => {
-    // Local mirror of the tool cards, so we can persist the trace without racing React state.
-    const trace: ToolCall[] = []
+  // TOOL-1: stream the agentic loop (tokens + inline tool calls) from the server. Fills `out` as it
+  // goes — a mirror of the tool cards that doesn't race React state and survives a throw.
+  const streamAgent = async (text: string, history: { role: string; content: string }[], sid: string | null, out: Turn): Promise<void> => {
+    const trace = out.tools
     const upTrace = (callId: string, patch: Partial<ToolCall> & { name?: string; args?: unknown }) => {
       const i = trace.findIndex(t => t.callId === callId)
       if (i >= 0) trace[i] = { ...trace[i], ...patch }
@@ -241,7 +296,7 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
       }),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = '', buffer = ''
+    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let buffer = ''
     while (reader) {
       const { done, value } = await reader.read()
       if (value) buffer += dec.decode(value, { stream: true })
@@ -251,28 +306,27 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
         const d = t.slice(5).trim(); if (!d) continue
         let e: any; try { e = JSON.parse(d) } catch { continue }
         switch (e.type) {
-          case 'token': acc += e.text || ''; patchLast(m => ({ ...m, content: acc })); break
+          case 'token': out.text += e.text || ''; patchLast(m => ({ ...m, content: out.text })); break
           case 'tool_call': upsertTool(e.callId, { name: e.name, args: e.args, status: 'running' }); upTrace(e.callId, { name: e.name, args: e.args, status: 'running' }); break
           case 'confirm': upsertTool(e.callId, { name: e.name, args: e.args, status: 'confirm' }); upTrace(e.callId, { name: e.name, args: e.args, status: 'confirm' }); break
           case 'tool_result': upsertTool(e.callId, { name: e.name, status: e.ok ? 'ok' : 'error', result: e.result }); upTrace(e.callId, { name: e.name, status: e.ok ? 'ok' : 'error', result: e.result }); break
-          case 'error': acc += (acc ? '\n' : '') + 'Error: ' + (e.message || 'unknown'); patchLast(m => ({ ...m, content: acc })); break
+          case 'error': out.text += (out.text ? '\n' : '') + 'Error: ' + (e.message || 'unknown'); patchLast(m => ({ ...m, content: out.text })); break
           case 'done': break
         }
       }
       if (done) break
     }
-    return { text: acc, tools: trace }
   }
 
   // Plain streaming for models without tool support — talk straight to llama-server (RUN-3).
-  const streamPlain = async (text: string, history: { role: string; content: string }[]): Promise<{ text: string; tools: ToolCall[] }> => {
+  const streamPlain = async (text: string, history: { role: string; content: string }[], out: Turn): Promise<void> => {
     const port = runtime!.port
     const resp = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: [{ role: 'system', content: sys }, ...history, { role: 'user', content: text }], temperature: temp, top_p: topP, max_tokens: maxTok, stream: true }),
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let acc = '', buffer = ''
+    const reader = resp.body?.getReader(); const dec = new TextDecoder(); let buffer = ''
     while (reader) {
       const { done, value } = await reader.read()
       if (value) buffer += dec.decode(value, { stream: true })
@@ -280,11 +334,10 @@ export default function Chat({ machine, runtime }: { machine: MachineProfile | n
       for (const line of lines) {
         const t = line.trim(); if (!t.startsWith('data:')) continue
         const d = t.slice(5).trim(); if (d === '' || d === '[DONE]') continue
-        try { const j = JSON.parse(d); const c = j.choices?.[0]?.delta?.content; if (c) { acc += c; patchLast(m => ({ ...m, content: acc })) } } catch { /* partial */ }
+        try { const j = JSON.parse(d); const c = j.choices?.[0]?.delta?.content; if (c) { out.text += c; patchLast(m => ({ ...m, content: out.text })) } } catch { /* partial */ }
       }
       if (done) break
     }
-    return { text: acc, tools: [] }
   }
 
   const vramUsed = gpu ? g(gpu.telemetry.vramUsedBytes) : '0'
