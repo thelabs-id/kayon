@@ -288,6 +288,21 @@ export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
 }
 
+/** UPD: self-update state. `supported` is false outside the desktop app (no updater to drive). */
+export interface UpdateStatus {
+  supported: boolean
+  checking: boolean
+  downloading: boolean
+  available: string | null
+  notes: string | null
+  current: string
+  ready: boolean
+  downloadedBytes: number
+  totalBytes: number | null
+  error: string | null
+  autoCheck: boolean
+}
+
 export interface ChatSessionSummary {
   id: string
   title: string
@@ -390,6 +405,14 @@ export const api = {
   // List files in the session workspace (attached files + model-created artifacts).
   listWorkspace: (sessionId: string) =>
     apiFetch<ApiResponse<{ auto: boolean; files: { name: string; bytes: number; isDir: boolean }[] }>>(`/api/chat/sessions/${sessionId}/workspace`),
+  // UPD: self-update. Checking is off-switchable; a found version is announced, never fetched
+  // without a click, and every request lands in the network log.
+  updateStatus: () => apiFetch<ApiResponse<UpdateStatus>>('/api/update/status'),
+  updateCheck: () => apiFetch<ApiResponse<UpdateStatus>>('/api/update/check', { method: 'POST' }),
+  updateDownload: () => apiFetch<ApiResponse<UpdateStatus>>('/api/update/download', { method: 'POST' }),
+  updateInstall: () => apiFetch<ApiResponse<boolean>>('/api/update/install', { method: 'POST' }),
+  updateSetAuto: (enabled: boolean) =>
+    apiFetch<ApiResponse<UpdateStatus>>('/api/update/auto', { method: 'POST', body: JSON.stringify({ enabled }) }),
   // TOOL-8: raw bytes of one workspace file, for the viewer. A URL rather than a fetch helper
   // because <img>/<a download> consume it directly. Served read-only through the scope guard.
   workspaceFileUrl: (sessionId: string, name: string) =>

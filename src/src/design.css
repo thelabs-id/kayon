@@ -233,6 +233,12 @@
 .statline b{color:var(--iris);font-weight:500}
 .chatside{width:280px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:20px}
 
+/* UPD — the update bar. Present only when there is something to say, never a standing nag. */
+.updbar{display:flex;align-items:center;gap:10px;margin-bottom:18px;padding:10px 14px;border:1px solid var(--line2);border-radius:9px;background:var(--panel);font-size:12.5px;color:var(--ink)}
+.updtext{flex:1;min-width:0;line-height:1.5}
+.updclose{border:0;background:transparent;color:var(--faint);font-size:15px;line-height:1;cursor:pointer;padding:2px 4px;flex:none}
+.updclose:hover{color:var(--ink)}
+
 /* TOOL-8 — artifact & document viewer. Wider than the params rail: this panel has to show a PDF
    page or a rendered artifact, not a column of sliders. */
 .chatfiles{width:520px;flex:none;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0}

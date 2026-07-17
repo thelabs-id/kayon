@@ -9,6 +9,7 @@ pub mod library;
 pub mod ollama;
 pub mod runtime;
 pub mod tools;
+pub mod update;
 pub mod agent;
 pub mod telemetry;
 pub mod ipc;
@@ -65,6 +66,14 @@ pub fn start_api_server() {
     let rt = Arc::new(runtime::RuntimeManager::new());
 
     let state = AppState { db, dl, rt, tool_decisions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())) };
+
+    // UPD-1: the launch check, on the API server's own connection rather than a second one. It is a
+    // no-op when the switch is off or when there is no updater (the headless server binary), and it
+    // is spawned so an unreachable manifest never delays the window (UPD-5).
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move { let _ = update::check(&db, false).await; });
+    }
 
     // DL-1: resume any downloads that were mid-flight when the app last exited. Their partial
     // files and rows are persisted, so we re-drive them (Range-resumed) on startup.
@@ -147,6 +156,12 @@ pub fn start_api_server() {
         .route("/api/chat/sessions/{id}/files", post(attach_file))
         .route("/api/chat/sessions/{id}/workspace", get(list_workspace))
         .route("/api/chat/sessions/{id}/files/{name}", get(read_workspace_file))
+        // UPD: self-update. Announce, then download and install only on an explicit click.
+        .route("/api/update/status", get(update_status))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/download", post(update_download))
+        .route("/api/update/install", post(update_install))
+        .route("/api/update/auto", post(update_set_auto))
         .fallback(static_handler)
         // Defence in depth against CSRF to the loopback control API: CORS blocks reading
         // responses and preflighted requests, but a malicious page can still fire "simple"
@@ -209,9 +224,13 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        .setup(|_app| {
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
             // Only the primary instance reaches setup(), so only it starts the API server — no
             // port contention. The UI polls at 1 Hz and shows data as soon as the server is up.
+            // Must precede start_api_server: the launch check inside it needs the handle to know
+            // there is an updater at all.
+            update::set_app_handle(app.handle().clone());
             start_api_server();
             Ok(())
         })
@@ -1314,6 +1333,40 @@ async fn attach_file(
         Ok(_) => ok_json(serde_json::json!({ "name": fname, "bytes": bytes.len() })).into_response(),
         Err(e) => err_json(&e.to_string()).into_response(),
     }
+}
+
+// ---- UPD: self-update ----
+
+async fn update_status(State(s): State<AppState>) -> impl IntoResponse {
+    ok_json(update::snapshot(&s.db))
+}
+
+async fn update_check(State(s): State<AppState>) -> impl IntoResponse {
+    // A click on "Check for updates" is itself consent, so this ignores the auto-check switch.
+    match update::check(&s.db, true).await {
+        Ok(_) => ok_json(update::snapshot(&s.db)).into_response(),
+        Err(e) => err_json(&e).into_response(),
+    }
+}
+
+async fn update_download(State(s): State<AppState>) -> impl IntoResponse {
+    match update::download(&s.db).await {
+        Ok(_) => ok_json(update::snapshot(&s.db)).into_response(),
+        Err(e) => err_json(&e).into_response(),
+    }
+}
+
+/// Applies the already-downloaded, signature-verified update and restarts (UPD-2).
+async fn update_install() -> impl IntoResponse {
+    match update::install_and_relaunch() {
+        Ok(_) => ok_json(true).into_response(),
+        Err(e) => err_json(&e).into_response(),
+    }
+}
+
+async fn update_set_auto(State(s): State<AppState>, Json(b): Json<ToggleReq>) -> impl IntoResponse {
+    update::set_auto_check(&s.db, b.enabled);
+    ok_json(update::snapshot(&s.db))
 }
 
 /// The Content-Type to serve a workspace file under (TOOL-8).

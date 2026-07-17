@@ -57,6 +57,10 @@ No account. No cloud. Telemetry is off by default, and when you do turn it on yo
 payload before anything leaves. Every outbound request in the app funnels through one instrumented
 choke point and lands in a network log you can read.
 
+Kayon makes exactly four kinds of network call: catalog lookups, model downloads, update checks, and
+telemetry if you opted in. Each is separately controllable and each one shows up in the log,
+including Kayon's own update check. An update path that skipped the log would make the log a lie.
+
 ---
 
 ## Download
@@ -121,6 +125,21 @@ Local chat with an agentic tool loop. Every tool call shows up inline.
   its payload before it sends.
 
 ---
+
+## Updates
+
+Kayon installs for your user, not for the whole machine, so applying an update is a click rather than
+a Windows admin prompt.
+
+On launch it asks GitHub whether a newer version exists. That request carries no identifiers, it is
+recorded in the network log like everything else, and a switch in Settings turns it off completely,
+at which point Kayon makes no update call at all. Finding a version does not download it: you are
+told what is available and nothing is fetched until you say so, the same rule models follow. Once the
+download is done Kayon shows **Relaunch to update**, and the install happens on that click.
+
+Every update artifact is signed, and the app verifies the signature against a key baked into it
+before running anything. An installer that fails that check is refused rather than executed, which
+matters because this is the one feature that downloads and runs code.
 
 ## Tools
 

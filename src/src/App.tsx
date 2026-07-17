@@ -7,6 +7,7 @@ import Chat from './pages/Chat'
 import Privacy from './pages/Privacy'
 import Settings from './pages/Settings'
 import Onboarding from './pages/Onboarding'
+import UpdateBar from './components/UpdateBar'
 import { KMark } from './components/icons'
 
 export type View = 'dashboard' | 'browser' | 'library' | 'chat' | 'privacy' | 'settings'
@@ -135,6 +136,7 @@ export default function App() {
             </aside>
 
             <main className="content softscroll">
+              <UpdateBar />
               {page()}
             </main>
           </div>
