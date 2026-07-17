@@ -3,44 +3,90 @@ use crate::probe;
 use chrono::Utc;
 
 /// Reserve beyond weights + KV, in two parts. **Both are measured against the shipped Vulkan
-/// backend** (§3) — the previous values were inherited CUDA folklore and over-reserved ~1.3 GB,
-/// i.e. 16% of an 8 GB card, which made Kayon report "won't fit" for models that fit comfortably.
+/// backend** (§3) at the exact llama.cpp build in `runtime-pin.json` — never inherited from CUDA
+/// folklore, and never carried across a runtime bump without re-measuring.
 ///
-/// What llama.cpp actually allocates, read from its own load-time report on an RTX 4060:
+/// That last clause is not hypothetical. The vocabulary model these constants replace was itself
+/// measured, was correct for the build it was measured on, and is wrong here: upstream moved the
+/// output logits out of VRAM entirely. Re-measure on every pin bump.
 ///
-/// | model        | n_vocab | ctx 2048 | ctx 4096 | ctx 16384 |
-/// |--------------|---------|----------|----------|-----------|
-/// | smollm2-135m |  49,152 |  97.1 Mi |  97.1 Mi |   97.1 Mi |
-/// | llama-3.2-1b | 128,256 | 254.5 Mi | 258.5 Mi |  254.5 Mi |
-/// | llama-3.2-3b | 128,256 | 278.5 Mi | 256.5 Mi |  256.5 Mi |
+/// What b10056 actually allocates, from llama.cpp's own `-v` report on an RTX 4060:
 ///
-/// Two things fall out. The compute buffer is **flat in context length** (it is not the KV cache),
-/// and it tracks **vocabulary**, not parameter count — it is dominated by the output logits,
-/// `n_ubatch(512) × n_vocab × 4 bytes`, which is why the 1B and 3B agree to within noise while the
-/// 135M (smaller vocab) is a third of the size. A 70B llama needs the same ~256 MiB as the 3B.
+/// | model        | n_embd | n_ff   | n_ctx | observed  | this model |
+/// |--------------|--------|--------|-------|-----------|------------|
+/// | smollm2-135m |    576 |  1,536 |  4096 |  15.26 Mi |      15.26 |
+/// | llama-3.2-1b |  2,048 |  8,192 |  2048 |  58.01 Mi |      58.01 |
+/// | llama-3.2-1b |  2,048 |  8,192 | 16384 |  72.01 Mi |      72.01 |
+/// | llama-3.2-3b |  3,072 |  8,192 |  4096 |  64.01 Mi |      64.01 |
+/// | llama-3.1-8b |  4,096 | 14,336 |  4096 | 104.01 Mi |     104.01 |
+/// | llama-3.1-8b |  4,096 | 14,336 | 16384 | 116.01 Mi |     116.01 |
 ///
-/// So the compute buffer is computed from the model's own vocabulary rather than assumed. A flat
-/// constant is only safe until it isn't: 512 MiB would exactly equal Gemma 3's 262,144-token vocab
-/// and under-reserve anything past it — a false "fits" on the largest-vocab models, which is the
-/// dangerous direction.
-const UBATCH: u64 = 512; // llama.cpp's default n_ubatch, which sizes the logits buffer
-const LOGIT_BYTES: u64 = 4; // f32 logits
-/// Floor for the graph itself, so a tiny-vocab model still reserves something sane.
-const COMPUTE_BUFFER_FLOOR: u64 = 96 * 1024 * 1024;
-/// Used only when the GGUF header didn't carry `vocab_size`. Covers a 393k vocab — half again the
-/// largest shipping vocabulary — because guessing low here means an OOM the user was promised
-/// wouldn't happen.
-const COMPUTE_BUFFER_UNKNOWN_VOCAB: u64 = 768 * 1024 * 1024;
+/// Two terms, both load-bearing:
+///
+/// - **Activations** — `n_ubatch × (2·n_embd + 3·n_ff) × 4`. Tracks the model's *width*; it is
+///   independent of depth, parameter count, and vocabulary.
+/// - **The f16 KQ mask** — `n_ubatch × n_ctx × 2`, i.e. 1 MiB per 1024 tokens of context. Identical
+///   across every model measured, because it is head- and width-independent.
+///
+/// **The context term is the correctness fix.** The previous model had none: on the older build the
+/// output logits (`n_ubatch × n_vocab × 4` ≈ 250 MiB) dominated the allocation and buried it.
+/// b10056 moved the logits to a *host* buffer — `Vulkan_Host output buffer = n_seq × n_vocab × 4`,
+/// 1.96 MiB of system RAM, not VRAM — so vocabulary now costs no VRAM at all and what remains grows
+/// with context. A vocabulary-sized reserve is therefore both far too large at short contexts *and*
+/// too small at long ones: smollm2 at ctx 131072 needs ~139 MiB where the old model returned its
+/// 96 MiB floor. That is a false "fits", which is the direction that OOMs a user we promised.
+///
+/// `n_ctx` (not `n_ctx/n_parallel`) is the right context term for the flags RUN-1 actually passes:
+/// llama-server defaults to `kv_unified = true`, which gives every slot the full context.
+const UBATCH: u64 = 512; // llama.cpp's default n_ubatch, which sizes every activation in the graph
+const ACT_BYTES: u64 = 4; // f32 activations
+const MASK_BYTES: u64 = 2; // f16 KQ mask
 
-/// The compute buffer llama.cpp will allocate: `n_ubatch × n_vocab × 4`, floored.
+/// Stand-in for `n_ff` when the arch block predates it (a catalog entry generated before the field
+/// existed). The widest ratio in any shipping model is gemma-2-27b's 36,864/4,608 = 8x, so this
+/// over-reserves for everything else — deliberately, because guessing low is the direction that OOMs.
+const FF_RATIO_FALLBACK: u64 = 8;
+
+/// Used when the arch block carries no width at all: nothing to compute from, so reserve enough to
+/// cover a wide model rather than invent a number.
+const COMPUTE_BUFFER_UNKNOWN: u64 = 512 * 1024 * 1024;
+
+/// **Mixture-of-Experts is deliberately not modeled.** Its experts allocate activation the dense
+/// width model does not describe, and it fails in the direction that OOMs: deepseek-coder-v2
+/// (n_expert 64, n_expert_used 6, n_ff_exp 1408) allocated **154.88 MiB** where the dense model
+/// predicts 76.12 — a 2x under-reserve, i.e. a false "fits". This matters for real users:
+/// `deepseek2`, `mixtral`, `qwen2moe`, `qwen3moe`, `dbrx`, `granitemoe` and `olmoe` are all in the
+/// supported-standard set and so get real verdicts, and MoE GGUFs arrive via Ollama adoption.
 ///
-/// Verified against llama.cpp's own report: smollm2-135m (vocab 49,152) → predicted 96 MiB,
-/// observed 97.1; llama-3.2-1b/3b (vocab 128,256) → predicted 250.5 MiB, observed 254.5-256.5.
-fn compute_buffer_bytes(vocab_size: Option<u32>) -> u64 {
-    match vocab_size {
-        Some(v) if v > 0 => std::cmp::max(UBATCH * v as u64 * LOGIT_BYTES, COMPUTE_BUFFER_FLOOR),
-        _ => COMPUTE_BUFFER_UNKNOWN_VOCAB,
+/// One measurement is not a model. Rather than fabricate an expert term from a single data point,
+/// MoE reserves this flat figure — comfortably above the one MoE we have measured, and honestly
+/// labelled as conservative-because-unmeasured. Deriving the real expert term needs several MoE
+/// models to measure against and is post-v1 (§7).
+const COMPUTE_BUFFER_MOE_UNMEASURED: u64 = 512 * 1024 * 1024;
+
+/// The VRAM compute buffer llama.cpp will allocate: activations (model width) + KQ mask (context).
+///
+/// Predicts llama.cpp's own reported figure to within 0.01 MiB across 135M→8B, two architecture
+/// families, three vocabularies, and ctx 1024→16384 — see the table above. Vocabulary is
+/// deliberately absent: as of b10056 the vocabulary-sized buffer lives in host RAM.
+fn compute_buffer_bytes(arch: &ArchBlock, context_length: u32) -> u64 {
+    let n_embd = arch.embedding_length as u64;
+    if n_embd == 0 {
+        return COMPUTE_BUFFER_UNKNOWN;
     }
+    let mask = UBATCH * context_length as u64 * MASK_BYTES;
+
+    // Experts allocate what the dense model can't see. Reserve rather than under-predict.
+    if arch.expert_count.is_some_and(|n| n > 0) {
+        return std::cmp::max(COMPUTE_BUFFER_MOE_UNMEASURED, mask);
+    }
+
+    let n_ff = arch
+        .feed_forward_length
+        .map(u64::from)
+        .unwrap_or(n_embd * FF_RATIO_FALLBACK);
+    let activations = UBATCH * (2 * n_embd + 3 * n_ff) * ACT_BYTES;
+    activations + mask
 }
 
 /// Everything else the runtime holds on the device (graph nodes, staging, allocator slack). The
@@ -127,6 +173,8 @@ pub fn evaluate_local(
         context_length: get("context_length").unwrap_or(context_length),
         key_length: get("attention.key_length"),
         value_length: get("attention.value_length"),
+        feed_forward_length: get("feed_forward_length"),
+        expert_count: get("expert_count"),
         vocab_size: gguf::vocab_size(&h),
         attention_type: gguf::attention_type(&h),
         runtime_min_version: None,
@@ -184,7 +232,8 @@ fn evaluate_inner(
         let per_block = per_block_override.unwrap_or(
             if arch.block_count > 0 { w_total / arch.block_count as u64 } else { 0 },
         );
-        let budget = vram_avail.saturating_sub(compute_buffer_bytes(arch.vocab_size) + RUNTIME_OVERHEAD);
+        let budget =
+            vram_avail.saturating_sub(compute_buffer_bytes(arch, context_length) + RUNTIME_OVERHEAD);
         let conservative_ngl = if per_block > 0 {
             ((budget / per_block) as i32).min(arch.block_count as i32).max(0)
         } else {
@@ -223,8 +272,9 @@ fn evaluate_inner(
     let ram_avail = ram_avail_raw.saturating_sub(os_headroom(ram_total));
     let comfort_margin = (vram_avail as f64 * COMFORT_MARGIN_RATIO) as u64;
 
-    // Sized from this model's vocabulary, not a flat guess — see compute_buffer_bytes.
-    let compute_buffer = compute_buffer_bytes(arch.vocab_size);
+    // Sized from this model's width and the requested context, not a flat guess — see
+    // compute_buffer_bytes. It grows with `context_length`, so it must be computed after it.
+    let compute_buffer = compute_buffer_bytes(arch, context_length);
     let need_full = w_total + kv + compute_buffer + RUNTIME_OVERHEAD;
 
     let (verdict, ngl, breakdown_text) = if need_full <= vram_avail.saturating_sub(comfort_margin) {
@@ -323,8 +373,10 @@ mod tests {
             context_length: 4096,
             key_length: None,
             value_length: None,
-            // Llama-3 class vocabulary, so the fixtures reserve the ~255 MiB measured on real
-            // hardware rather than the unknown-vocab fallback.
+            // Llama-3.1-8b's real width, so the fixtures reserve the 104 MiB measured on real
+            // hardware rather than the conservative missing-width fallback.
+            feed_forward_length: Some(14_336),
+            expert_count: None, // dense
             vocab_size: Some(128_256),
             attention_type: None,
             runtime_min_version: None,
@@ -409,31 +461,84 @@ mod tests {
         assert_eq!(kv_f16, kv_q8 * 2, "q8_0 KV should be half of f16 KV");
     }
 
+    /// An arch block with a given width, for the compute-buffer measurements.
+    fn arch_wh(embedding_length: u32, feed_forward_length: u32) -> ArchBlock {
+        ArchBlock { embedding_length, feed_forward_length: Some(feed_forward_length), ..llama_arch() }
+    }
+
     #[test]
-    fn compute_buffer_tracks_vocabulary_not_model_size() {
-        // Pinned against llama.cpp's own load-time report on an RTX 4060 (Vulkan). The engine must
-        // predict what the runtime will really allocate; these were measured, not derived.
-        // Tolerance covers the small graph overhead on top of the logits buffer.
+    fn compute_buffer_matches_what_llamacpp_really_allocates() {
+        // Every figure below is llama.cpp's own `-v` report on an RTX 4060 against the pinned
+        // Vulkan build (runtime-pin.json, b10056). These were measured, not derived — the engine's
+        // whole claim is that it predicts the runtime, so the test asserts against the runtime.
         let mib = |b: u64| b as f64 / 1048576.0;
-        let within = |got: u64, want: f64| (mib(got) - want).abs() <= 12.0;
+        // Tight on purpose: the model reproduced every observation to 0.01 MiB. A loose tolerance
+        // here would hide exactly the kind of drift that made the previous model wrong.
+        let obs = |arch: &ArchBlock, ctx: u32, want: f64| {
+            let got = mib(compute_buffer_bytes(arch, ctx));
+            assert!((got - want).abs() <= 0.05, "ctx {ctx}: predicted {got} MiB, llama.cpp allocated {want} MiB");
+        };
 
-        // smollm2-135m, vocab 49,152 -> observed 97.1 MiB
-        assert!(within(compute_buffer_bytes(Some(49_152)), 97.1),
-            "got {} MiB", mib(compute_buffer_bytes(Some(49_152))));
-        // llama-3.2-1b AND -3b share vocab 128,256 -> observed 254.5 and 256.5 MiB.
-        // Same answer for both is the point: it does not scale with parameter count.
-        assert!(within(compute_buffer_bytes(Some(128_256)), 255.0),
-            "got {} MiB", mib(compute_buffer_bytes(Some(128_256))));
+        obs(&arch_wh(576, 1_536), 4096, 15.26);      // smollm2-135m
+        obs(&arch_wh(2_048, 8_192), 2048, 58.01);    // llama-3.2-1b
+        obs(&arch_wh(2_048, 8_192), 16384, 72.01);   // llama-3.2-1b, long context
+        obs(&arch_wh(3_072, 8_192), 4096, 64.01);    // llama-3.2-3b
+        obs(&arch_wh(4_096, 14_336), 4096, 104.01);  // llama-3.1-8b
+        obs(&arch_wh(4_096, 14_336), 16384, 116.01); // llama-3.1-8b, long context
+    }
 
-        // Gemma-class 262,144 vocab needs ~512 MiB — the case a flat 512 MiB constant would have
-        // exactly exhausted, under-reserving into a false FITS.
-        assert!(mib(compute_buffer_bytes(Some(262_144))) >= 512.0);
+    #[test]
+    fn compute_buffer_grows_with_context_and_ignores_vocabulary() {
+        // The correctness fix. The previous model was flat in context because the old build's
+        // logits buffer buried the context term; b10056 moved the logits to host RAM. A model with
+        // no context term under-reserves at long context, which is a false FITS.
+        let a = arch_wh(2_048, 8_192);
+        let short = compute_buffer_bytes(&a, 2048);
+        let long = compute_buffer_bytes(&a, 131_072);
+        assert!(long > short, "compute buffer must grow with context");
+        // 1 MiB per 1024 tokens of context, measured identically on every model.
+        assert_eq!(long - short, UBATCH * (131_072 - 2048) * MASK_BYTES);
 
-        // Unknown vocab must not guess low: reserve more than the largest shipping vocabulary.
-        assert!(compute_buffer_bytes(None) > compute_buffer_bytes(Some(262_144)));
-        assert!(compute_buffer_bytes(Some(0)) == compute_buffer_bytes(None), "0 is not a vocab");
+        // Vocabulary costs no VRAM as of b10056: the output-logits buffer is host-side.
+        let mut big_vocab = arch_wh(2_048, 8_192);
+        big_vocab.vocab_size = Some(262_144);
+        assert_eq!(compute_buffer_bytes(&big_vocab, 4096), compute_buffer_bytes(&a, 4096));
+    }
 
-        // A tiny vocab still reserves the graph floor rather than something absurd.
-        assert_eq!(compute_buffer_bytes(Some(1_000)), COMPUTE_BUFFER_FLOOR);
+    #[test]
+    fn moe_reserves_above_what_the_dense_model_would_have_guessed() {
+        // deepseek-coder-v2 (n_embd 2048, n_ff 10944, n_expert 64, n_expert_used 6, n_ff_exp 1408)
+        // allocated 154.88 MiB at ctx 4096; the dense model predicts 76.12. Shipping the dense
+        // number for MoE would be a 2x under-reserve — a false FITS on seven supported arch
+        // families. Until the expert term is actually measured, MoE reserves conservatively.
+        let mut moe = arch_wh(2_048, 10_944);
+        moe.architecture = "deepseek2".into();
+        moe.expert_count = Some(64);
+
+        let dense = compute_buffer_bytes(&arch_wh(2_048, 10_944), 4096);
+        let got = compute_buffer_bytes(&moe, 4096);
+        let mib = |b: u64| b as f64 / 1048576.0;
+
+        assert!(mib(dense) < 154.88, "fixture guard: the dense model is the under-prediction");
+        assert!(mib(got) >= 154.88, "MoE must cover the 154.88 MiB really allocated, got {}", mib(got));
+        assert!(got > dense, "MoE must reserve above the dense estimate");
+    }
+
+    #[test]
+    fn compute_buffer_never_guesses_low_when_width_is_missing() {
+        // A catalog entry generated before feed_forward_length existed: fall back to the widest
+        // shipping ratio (gemma-2-27b, 8x) rather than under-reserve.
+        let mut no_ff = arch_wh(4_096, 14_336);
+        no_ff.feed_forward_length = None;
+        assert!(compute_buffer_bytes(&no_ff, 4096) > compute_buffer_bytes(&arch_wh(4_096, 14_336), 4096));
+        assert_eq!(
+            compute_buffer_bytes(&no_ff, 4096),
+            compute_buffer_bytes(&arch_wh(4_096, 4_096 * FF_RATIO_FALLBACK as u32), 4096)
+        );
+
+        // No width at all — nothing to compute from, so reserve rather than invent.
+        let mut nothing = arch_wh(4_096, 14_336);
+        nothing.embedding_length = 0;
+        assert_eq!(compute_buffer_bytes(&nothing, 4096), COMPUTE_BUFFER_UNKNOWN);
     }
 }

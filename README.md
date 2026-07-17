@@ -313,8 +313,10 @@ Decisions worth stating plainly, rather than leaving you to find them:
   by the checksum gate; the bundled anchor stays signed.
 - The catalog signing key isn't in source. It comes from `KAYON_CATALOG_SEED` or a gitignored key
   file, and the verifying key is baked into the binary. In production it belongs in a secret store.
-- Fit constants (runtime overhead, compute buffer, headroom) ship at measured defaults. On-device
-  calibration through the benchmark is a follow-up.
+- Fit constants (runtime overhead, compute buffer, headroom) ship at defaults measured against the
+  exact llama.cpp build Kayon bundles, and they are only true for that build: a runtime bump moved
+  the output-logits buffer out of VRAM and invalidated the previous model outright. Re-measuring is
+  part of bumping the pin. On-device calibration through the benchmark is a follow-up.
 - Chat is a hand-rolled streaming client over the OpenAI-compatible endpoint, not a chat library.
 - Tool-call traces persist per message. Summarized long-term memory and cross-chat recall aren't in
   this build.

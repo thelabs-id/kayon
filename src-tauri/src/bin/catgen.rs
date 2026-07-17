@@ -70,7 +70,14 @@ async fn fetch_arch(client: &reqwest::Client, repo: &str, file: &str) -> anyhow:
                     "contextLength": m("context_length"),
                     "keyLength": m("attention.key_length"),
                     "valueLength": m("attention.value_length"),
-                    // Sizes the compute buffer (fit §7): logits ≈ n_ubatch × vocab × 4.
+                    // With embeddingLength, sizes the compute buffer's activation term (fit §7):
+                    // n_ubatch × (2·n_embd + 3·n_ff) × 4.
+                    "feedForwardLength": m("feed_forward_length"),
+                    // Marks MoE, whose compute buffer the dense width model under-predicts ~2x
+                    // (fit §7) — those reserve conservatively instead.
+                    "expertCount": m("expert_count"),
+                    // Not a VRAM term as of b10056 (the logits buffer is host-side), but the
+                    // catalog records it.
                     "vocabSize": gguf::vocab_size(&h),
                     "attentionType": gguf::attention_type(&h),
                     "runtimeMinVersion": null

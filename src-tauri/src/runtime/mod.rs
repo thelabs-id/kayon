@@ -79,13 +79,19 @@ impl RuntimeManager {
         // (--host/--port) or the model path (-m). Drop any reserved flag (and its value) so a
         // catalog/client arg can't silently change the memory config or expose the API (§7, PRIV).
         // `-ub`/`-b` are reserved for the same reason as -ngl/-c: the fit engine's compute-buffer
-        // model is `n_ubatch × n_vocab × 4` with llama.cpp's default n_ubatch (§7). Letting an arg
-        // raise it would make the runtime allocate more than the verdict promised — a silent OOM
-        // against a "fits" the user was shown.
+        // model is `n_ubatch × (2·n_embd + 3·n_ff) × 4 + n_ubatch × C × 2` at llama.cpp's *default*
+        // n_ubatch (§7). Letting an arg raise it would make the runtime allocate more than the
+        // verdict promised — a silent OOM against a "fits" the user was shown.
+        //
+        // `--parallel` is reserved because the §7 context term assumes llama-server's default
+        // `kv_unified = true`, i.e. `n_ctx_seq == n_ctx`. Passing it flips unified KV off and
+        // silently re-cuts every slot's context to `n_ctx / n_parallel` — the verdict would then
+        // describe a context the user does not actually get.
         const RESERVED: &[&str] = &[
             "-ngl", "--n-gpu-layers", "-c", "--ctx-size", "--cache-type-k", "--cache-type-v",
             "--host", "--port", "-m", "--model",
             "-ub", "--ubatch-size", "-b", "--batch-size",
+            "-np", "--parallel",
         ];
         let mut skip_value = false;
         for arg in runtime_args {

@@ -158,6 +158,8 @@ async fn fetch_arch(
                 let head_count_kv = m("attention.head_count_kv").unwrap_or(head_count);
                 let key_length = m("attention.key_length");
                 let value_length = m("attention.value_length");
+                let feed_forward_length = m("feed_forward_length");
+                let expert_count = m("expert_count");
                 let vocab_size = crate::gguf::vocab_size(&h);
                 let attention_type = crate::gguf::attention_type(&h);
                 return Ok(ArchBlock {
@@ -169,6 +171,8 @@ async fn fetch_arch(
                     context_length,
                     key_length,
                     value_length,
+                    feed_forward_length,
+                    expert_count,
                     vocab_size,
                     attention_type,
                     runtime_min_version: None,
@@ -291,10 +295,16 @@ async fn try_build_entry(
     if quants.is_empty() { return None; }
 
     // arch is identical across quants — reuse from cache if this oid is already known, else fetch.
-    // A cached block missing `vocab_size` is *incomplete*, not a hit: the bundled anchor predates
-    // that field, and accepting it would silently hand every known model the fit engine's
-    // conservative unknown-vocab reserve for ever. Re-fetching the header once heals it.
-    let arch = match cache.get(&quants[0].sha256).filter(|a| a.vocab_size.is_some()) {
+    // A cached block missing `feed_forward_length` is *incomplete*, not a hit: entries cached before
+    // that field existed would otherwise hand every known model the fit engine's conservative
+    // 8x-n_embd fallback for ever. Re-fetching the header once heals it.
+    //
+    // This filter names whichever field currently sizes the compute buffer — it was `vocab_size`
+    // until b10056 moved the logits buffer to host RAM. Move it whenever that model moves.
+    let arch = match cache
+        .get(&quants[0].sha256)
+        .filter(|a| a.feed_forward_length.is_some())
+    {
         Some(a) => a.clone(),
         None => {
             let first_file = quants[0].source.rsplit('/').next().unwrap();

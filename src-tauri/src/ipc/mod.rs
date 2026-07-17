@@ -136,9 +136,21 @@ pub struct ArchBlock {
     pub context_length: u32,
     pub key_length: Option<u32>,
     pub value_length: Option<u32>,
-    /// `{arch}.vocab_size` from the GGUF. Sizes the compute buffer, which is dominated by the
-    /// output logits and therefore tracks vocabulary, not parameter count (see `fit::COMPUTE_*`).
-    /// `None` when the header didn't carry it — the fit engine then falls back conservatively.
+    /// `{arch}.feed_forward_length` from the GGUF. With `embedding_length` this sizes the compute
+    /// buffer's activation term (see `fit::compute_buffer_bytes`). `None` for a catalog entry
+    /// generated before the field existed — the fit engine then falls back conservatively.
+    #[serde(default)]
+    pub feed_forward_length: Option<u32>,
+    /// `{arch}.expert_count` from the GGUF: `Some(n > 0)` marks a Mixture-of-Experts model, whose
+    /// compute buffer the dense width model under-predicts by ~2x. The fit engine reserves
+    /// conservatively for those rather than guess (see `fit::COMPUTE_BUFFER_MOE_UNMEASURED`).
+    #[serde(default)]
+    pub expert_count: Option<u32>,
+    /// `{arch}.vocab_size` from the GGUF, or the tokenizer's token count.
+    ///
+    /// **Not a VRAM term.** As of llama.cpp b10056 the vocabulary-sized output-logits buffer lives
+    /// in host RAM (`Vulkan_Host output buffer`), so it no longer enters the fit model; it is kept
+    /// because the catalog carries it and it is the honest description of the model.
     #[serde(default)]
     pub vocab_size: Option<u32>,
     pub attention_type: Option<String>,
