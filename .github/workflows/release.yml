@@ -171,7 +171,11 @@ jobs:
           if (-not $manifestAsset) {
             throw "release $tag has no latest.json. The updater has nothing to poll and every installed Kayon would see no update. Assets: $($assets.name -join ', ')"
           }
-          $manifest = Invoke-RestMethod $manifestAsset.url
+          # The release is still a draft, whose asset URLs are not publicly fetchable. Download
+          # through gh (authenticated by GH_TOKEN) rather than a raw request, which would 404 here.
+          gh release download $tag --pattern latest.json --output latest.json --clobber
+          if ($LASTEXITCODE -ne 0) { throw "could not download latest.json from draft release $tag" }
+          $manifest = Get-Content latest.json -Raw | ConvertFrom-Json
           if ($manifest.version -ne $expected) {
             throw "latest.json advertises $($manifest.version) but this release is $expected. Installed apps compare against it, so the release would be misdelivered."
           }
