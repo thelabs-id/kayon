@@ -98,7 +98,7 @@ export interface VerdictBreakdown {
   weightsBytes: number
   kvBytes: number
   computeBufferBytes: number
-  cudaOverheadBytes: number
+  runtimeOverheadBytes: number
   vramAvailBytes: number
   ramAvailBytes: number
   headroomDisplayBytes: number

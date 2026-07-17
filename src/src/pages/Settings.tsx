@@ -52,7 +52,7 @@ export default function Settings() {
         <div className="panel">
           <span className="mkey">Runtime</span>
           <div className="speclist" style={{ marginTop: 8 }}>
-            <div className="specr" style={{ borderTop: 0, paddingTop: 0 }}><span className="speck">llama-server</span><span className="specv">CUDA sidecar</span></div>
+            <div className="specr" style={{ borderTop: 0, paddingTop: 0 }}><span className="speck">llama-server</span><span className="specv" title="Vulkan keeps the download at ~20 MB; the CUDA build would add roughly 600 MB. Slower than CUDA on NVIDIA, mostly on prompt processing.">Vulkan sidecar</span></div>
             <div className="specr"><span className="speck">KV cache</span><span className="specv">f16 (default)</span></div>
             <div className="specr"><span className="speck">Flash attention</span><span className="specv">auto</span></div>
           </div>

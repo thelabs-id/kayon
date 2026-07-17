@@ -158,6 +158,7 @@ async fn fetch_arch(
                 let head_count_kv = m("attention.head_count_kv").unwrap_or(head_count);
                 let key_length = m("attention.key_length");
                 let value_length = m("attention.value_length");
+                let vocab_size = crate::gguf::vocab_size(&h);
                 let attention_type = crate::gguf::attention_type(&h);
                 return Ok(ArchBlock {
                     architecture,
@@ -168,6 +169,7 @@ async fn fetch_arch(
                     context_length,
                     key_length,
                     value_length,
+                    vocab_size,
                     attention_type,
                     runtime_min_version: None,
                 });
@@ -289,7 +291,10 @@ async fn try_build_entry(
     if quants.is_empty() { return None; }
 
     // arch is identical across quants — reuse from cache if this oid is already known, else fetch.
-    let arch = match cache.get(&quants[0].sha256) {
+    // A cached block missing `vocab_size` is *incomplete*, not a hit: the bundled anchor predates
+    // that field, and accepting it would silently hand every known model the fit engine's
+    // conservative unknown-vocab reserve for ever. Re-fetching the header once heals it.
+    let arch = match cache.get(&quants[0].sha256).filter(|a| a.vocab_size.is_some()) {
         Some(a) => a.clone(),
         None => {
             let first_file = quants[0].source.rsplit('/').next().unwrap();

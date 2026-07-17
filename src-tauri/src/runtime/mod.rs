@@ -78,9 +78,14 @@ impl RuntimeManager {
         // configuration the fit engine single-sourced (-ngl/-c/cache-type) or the loopback binding
         // (--host/--port) or the model path (-m). Drop any reserved flag (and its value) so a
         // catalog/client arg can't silently change the memory config or expose the API (§7, PRIV).
+        // `-ub`/`-b` are reserved for the same reason as -ngl/-c: the fit engine's compute-buffer
+        // model is `n_ubatch × n_vocab × 4` with llama.cpp's default n_ubatch (§7). Letting an arg
+        // raise it would make the runtime allocate more than the verdict promised — a silent OOM
+        // against a "fits" the user was shown.
         const RESERVED: &[&str] = &[
             "-ngl", "--n-gpu-layers", "-c", "--ctx-size", "--cache-type-k", "--cache-type-v",
             "--host", "--port", "-m", "--model",
+            "-ub", "--ubatch-size", "-b", "--batch-size",
         ];
         let mut skip_value = false;
         for arg in runtime_args {
@@ -234,8 +239,6 @@ impl RuntimeManager {
         std::env::var("KAYON_RUNTIME_VERSION").ok().filter(|s| !s.trim().is_empty())
     }
 
-    /// Resolve the `llama-server` binary (RUN-1). Order: `KAYON_LLAMA_SERVER` env override,
-    /// else the bundled sidecar under the crate's `binaries/` dir, else the name on PATH.
     /// Resolve the `llama-server` binary (RUN-1). The runtime is bundled as a Tauri sidecar so it
     /// works out of the box with no user setup. Resolution order:
     ///   1. installed layout: `<exe_dir>/resources/binaries/llama/llama-server.exe` (Tauri resources)

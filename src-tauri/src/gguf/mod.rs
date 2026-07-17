@@ -265,6 +265,27 @@ pub fn template_supports_tools(h: &GgufHeader) -> bool {
     t.contains("tool_call") || t.contains("tool_calls") || t.contains("tools")
 }
 
+/// The model's vocabulary size, which sizes llama.cpp's compute buffer (fit §7: the output-logits
+/// buffer is `n_ubatch × n_vocab × 4`).
+///
+/// `{arch}.vocab_size` is a **llama-family convention** — gemma2/gemma4/qwen2/qwen35 GGUFs do not
+/// emit it (verified against the live catalog). The portable source is the tokenizer's own token
+/// list, so fall back to its length. Returns None only when neither is present, and the fit engine
+/// then reserves conservatively rather than guessing.
+pub fn vocab_size(h: &GgufHeader) -> Option<u32> {
+    if let Some(arch) = arch_from_header(h) {
+        if let Some(v) = h.metadata.get(&format!("{arch}.vocab_size")).and_then(|v| v.as_u32()) {
+            if v > 0 {
+                return Some(v);
+            }
+        }
+    }
+    match h.metadata.get("tokenizer.ggml.tokens") {
+        Some(GgufValue::Array(items)) if !items.is_empty() => u32::try_from(items.len()).ok(),
+        _ => None,
+    }
+}
+
 pub fn attention_type(h: &GgufHeader) -> Option<String> {
     // Check the architecture-scoped key (`<arch>.attention.type`) as well as the general ones,
     // so a supported-arch model that declares hybrid/linear attention is caught, not treated as

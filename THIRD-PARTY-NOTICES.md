@@ -17,7 +17,7 @@ cd src && npx license-checker --summary
 
 ## Bundled / redistributed binaries
 
-### llama.cpp — `llama-server.exe` (CUDA)
+### llama.cpp — `llama-server.exe` (Vulkan)
 The installer bundles the prebuilt llama.cpp server (and its `ggml` libraries) as the inference
 runtime. Upstream: <https://github.com/ggml-org/llama.cpp>.
 **License: MIT** — © 2023 The ggml authors. The full MIT text applies (see the upstream `LICENSE`);

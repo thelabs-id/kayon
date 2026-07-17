@@ -2,8 +2,51 @@ use crate::ipc::*;
 use crate::probe;
 use chrono::Utc;
 
-const CUDA_OVERHEAD: u64 = 500 * 1024 * 1024;
-const COMPUTE_BUFFER: u64 = 1024 * 1024 * 1024;
+/// Reserve beyond weights + KV, in two parts. **Both are measured against the shipped Vulkan
+/// backend** (§3) — the previous values were inherited CUDA folklore and over-reserved ~1.3 GB,
+/// i.e. 16% of an 8 GB card, which made Kayon report "won't fit" for models that fit comfortably.
+///
+/// What llama.cpp actually allocates, read from its own load-time report on an RTX 4060:
+///
+/// | model        | n_vocab | ctx 2048 | ctx 4096 | ctx 16384 |
+/// |--------------|---------|----------|----------|-----------|
+/// | smollm2-135m |  49,152 |  97.1 Mi |  97.1 Mi |   97.1 Mi |
+/// | llama-3.2-1b | 128,256 | 254.5 Mi | 258.5 Mi |  254.5 Mi |
+/// | llama-3.2-3b | 128,256 | 278.5 Mi | 256.5 Mi |  256.5 Mi |
+///
+/// Two things fall out. The compute buffer is **flat in context length** (it is not the KV cache),
+/// and it tracks **vocabulary**, not parameter count — it is dominated by the output logits,
+/// `n_ubatch(512) × n_vocab × 4 bytes`, which is why the 1B and 3B agree to within noise while the
+/// 135M (smaller vocab) is a third of the size. A 70B llama needs the same ~256 MiB as the 3B.
+///
+/// So the compute buffer is computed from the model's own vocabulary rather than assumed. A flat
+/// constant is only safe until it isn't: 512 MiB would exactly equal Gemma 3's 262,144-token vocab
+/// and under-reserve anything past it — a false "fits" on the largest-vocab models, which is the
+/// dangerous direction.
+const UBATCH: u64 = 512; // llama.cpp's default n_ubatch, which sizes the logits buffer
+const LOGIT_BYTES: u64 = 4; // f32 logits
+/// Floor for the graph itself, so a tiny-vocab model still reserves something sane.
+const COMPUTE_BUFFER_FLOOR: u64 = 96 * 1024 * 1024;
+/// Used only when the GGUF header didn't carry `vocab_size`. Covers a 393k vocab — half again the
+/// largest shipping vocabulary — because guessing low here means an OOM the user was promised
+/// wouldn't happen.
+const COMPUTE_BUFFER_UNKNOWN_VOCAB: u64 = 768 * 1024 * 1024;
+
+/// The compute buffer llama.cpp will allocate: `n_ubatch × n_vocab × 4`, floored.
+///
+/// Verified against llama.cpp's own report: smollm2-135m (vocab 49,152) → predicted 96 MiB,
+/// observed 97.1; llama-3.2-1b/3b (vocab 128,256) → predicted 250.5 MiB, observed 254.5-256.5.
+fn compute_buffer_bytes(vocab_size: Option<u32>) -> u64 {
+    match vocab_size {
+        Some(v) if v > 0 => std::cmp::max(UBATCH * v as u64 * LOGIT_BYTES, COMPUTE_BUFFER_FLOOR),
+        _ => COMPUTE_BUFFER_UNKNOWN_VOCAB,
+    }
+}
+
+/// Everything else the runtime holds on the device (graph nodes, staging, allocator slack). The
+/// NVML-observed total for a loaded model came in *at or below* weights + KV + compute buffer, so
+/// this is margin rather than a measured line item.
+const RUNTIME_OVERHEAD: u64 = 128 * 1024 * 1024;
 const COMFORT_MARGIN_RATIO: f64 = 0.10;
 
 fn display_headroom(vram_total: u64) -> u64 {
@@ -84,6 +127,7 @@ pub fn evaluate_local(
         context_length: get("context_length").unwrap_or(context_length),
         key_length: get("attention.key_length"),
         value_length: get("attention.value_length"),
+        vocab_size: gguf::vocab_size(&h),
         attention_type: gguf::attention_type(&h),
         runtime_min_version: None,
         architecture: architecture.clone(),
@@ -135,12 +179,12 @@ fn evaluate_inner(
         // We can't model KV for this architecture, but we still avoid a fabricated all-layers
         // offload that would OOM a small GPU (RUN-1). Conservatively offload only as many whole
         // layers as the weights alone fit in VRAM (KV excluded because it's unknown); if we can't
-        // estimate a per-layer size, fall back to CPU-only (0) rather than -ngl 999.
+        // estimate a per-layer size, fall back to CPU-only (0) rather than an all-layers offload.
         let vram_avail = vram_free.saturating_sub(display_headroom(vram_total));
         let per_block = per_block_override.unwrap_or(
             if arch.block_count > 0 { w_total / arch.block_count as u64 } else { 0 },
         );
-        let budget = vram_avail.saturating_sub(COMPUTE_BUFFER + CUDA_OVERHEAD);
+        let budget = vram_avail.saturating_sub(compute_buffer_bytes(arch.vocab_size) + RUNTIME_OVERHEAD);
         let conservative_ngl = if per_block > 0 {
             ((budget / per_block) as i32).min(arch.block_count as i32).max(0)
         } else {
@@ -179,20 +223,22 @@ fn evaluate_inner(
     let ram_avail = ram_avail_raw.saturating_sub(os_headroom(ram_total));
     let comfort_margin = (vram_avail as f64 * COMFORT_MARGIN_RATIO) as u64;
 
-    let need_full = w_total + kv + COMPUTE_BUFFER + CUDA_OVERHEAD;
+    // Sized from this model's vocabulary, not a flat guess — see compute_buffer_bytes.
+    let compute_buffer = compute_buffer_bytes(arch.vocab_size);
+    let need_full = w_total + kv + compute_buffer + RUNTIME_OVERHEAD;
 
     let (verdict, ngl, breakdown_text) = if need_full <= vram_avail.saturating_sub(comfort_margin) {
         (VerdictKind::FitsFully, arch.block_count as i32, format!(
             "Weights {:.1} GB + KV {:.1} GB + buffers {:.1} GB = {:.1} GB vs {:.1} GB available (comfort margin {:.1} GB)",
-            gb(w_total), gb(kv), gb(COMPUTE_BUFFER + CUDA_OVERHEAD), gb(need_full), gb(vram_avail), gb(comfort_margin)
+            gb(w_total), gb(kv), gb(compute_buffer + RUNTIME_OVERHEAD), gb(need_full), gb(vram_avail), gb(comfort_margin)
         ))
     } else if need_full <= vram_avail {
         (VerdictKind::FitsTight, arch.block_count as i32, format!(
             "Weights {:.1} GB + KV {:.1} GB + buffers {:.1} GB = {:.1} GB fits within {:.1} GB but with thin headroom",
-            gb(w_total), gb(kv), gb(COMPUTE_BUFFER + CUDA_OVERHEAD), gb(need_full), gb(vram_avail)
+            gb(w_total), gb(kv), gb(compute_buffer + RUNTIME_OVERHEAD), gb(need_full), gb(vram_avail)
         ))
     } else {
-        let gpu_budget = vram_avail.saturating_sub(COMPUTE_BUFFER + CUDA_OVERHEAD);
+        let gpu_budget = vram_avail.saturating_sub(compute_buffer + RUNTIME_OVERHEAD);
         let kv_on_gpu_per_layer = if arch.block_count > 0 { kv / arch.block_count as u64 } else { 0 };
         let mut ngl: i32 = 0;
         let mut gpu_used = 0u64;
@@ -233,8 +279,8 @@ fn evaluate_inner(
     let breakdown = Some(VerdictBreakdown {
         weights_bytes: w_total,
         kv_bytes: kv,
-        compute_buffer_bytes: COMPUTE_BUFFER,
-        cuda_overhead_bytes: CUDA_OVERHEAD,
+        compute_buffer_bytes: compute_buffer,
+        runtime_overhead_bytes: RUNTIME_OVERHEAD,
         vram_avail_bytes: vram_avail,
         ram_avail_bytes: ram_avail,
         headroom_display_bytes: display_headroom(vram_total),
@@ -277,6 +323,9 @@ mod tests {
             context_length: 4096,
             key_length: None,
             value_length: None,
+            // Llama-3 class vocabulary, so the fixtures reserve the ~255 MiB measured on real
+            // hardware rather than the unknown-vocab fallback.
+            vocab_size: Some(128_256),
             attention_type: None,
             runtime_min_version: None,
         }
@@ -358,5 +407,33 @@ mod tests {
         let kv_f16 = f16.breakdown.unwrap().kv_bytes;
         let kv_q8 = q8.breakdown.unwrap().kv_bytes;
         assert_eq!(kv_f16, kv_q8 * 2, "q8_0 KV should be half of f16 KV");
+    }
+
+    #[test]
+    fn compute_buffer_tracks_vocabulary_not_model_size() {
+        // Pinned against llama.cpp's own load-time report on an RTX 4060 (Vulkan). The engine must
+        // predict what the runtime will really allocate; these were measured, not derived.
+        // Tolerance covers the small graph overhead on top of the logits buffer.
+        let mib = |b: u64| b as f64 / 1048576.0;
+        let within = |got: u64, want: f64| (mib(got) - want).abs() <= 12.0;
+
+        // smollm2-135m, vocab 49,152 -> observed 97.1 MiB
+        assert!(within(compute_buffer_bytes(Some(49_152)), 97.1),
+            "got {} MiB", mib(compute_buffer_bytes(Some(49_152))));
+        // llama-3.2-1b AND -3b share vocab 128,256 -> observed 254.5 and 256.5 MiB.
+        // Same answer for both is the point: it does not scale with parameter count.
+        assert!(within(compute_buffer_bytes(Some(128_256)), 255.0),
+            "got {} MiB", mib(compute_buffer_bytes(Some(128_256))));
+
+        // Gemma-class 262,144 vocab needs ~512 MiB — the case a flat 512 MiB constant would have
+        // exactly exhausted, under-reserving into a false FITS.
+        assert!(mib(compute_buffer_bytes(Some(262_144))) >= 512.0);
+
+        // Unknown vocab must not guess low: reserve more than the largest shipping vocabulary.
+        assert!(compute_buffer_bytes(None) > compute_buffer_bytes(Some(262_144)));
+        assert!(compute_buffer_bytes(Some(0)) == compute_buffer_bytes(None), "0 is not a vocab");
+
+        // A tiny vocab still reserves the graph floor rather than something absurd.
+        assert_eq!(compute_buffer_bytes(Some(1_000)), COMPUTE_BUFFER_FLOOR);
     }
 }

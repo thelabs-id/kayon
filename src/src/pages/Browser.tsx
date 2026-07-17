@@ -63,9 +63,9 @@ function QuantRow({ q, v, ctxLabel, vramAvail, open, onToggle, onDownload, busy,
             <div className="bkbar">
               <span className="bkseg" style={{ width: `${(bd.weightsBytes / bd.totalNeedBytes) * 100}%`, background: 'var(--iris)' }} />
               <span className="bkseg" style={{ width: `${(bd.kvBytes / bd.totalNeedBytes) * 100}%`, background: 'var(--amber)' }} />
-              <span className="bkseg" style={{ width: `${((bd.computeBufferBytes + bd.cudaOverheadBytes) / bd.totalNeedBytes) * 100}%`, background: 'var(--v-cpu)' }} />
+              <span className="bkseg" style={{ width: `${((bd.computeBufferBytes + bd.runtimeOverheadBytes) / bd.totalNeedBytes) * 100}%`, background: 'var(--v-cpu)' }} />
             </div>
-            weights {g(bd.weightsBytes)} + KV@{ctxLabel} {g(bd.kvBytes)} + buffers {g(bd.computeBufferBytes + bd.cudaOverheadBytes)} = <b style={{ color: 'var(--ink)' }}>{g(bd.totalNeedBytes)} GB</b> vs {vramAvail} GB available
+            weights {g(bd.weightsBytes)} + KV@{ctxLabel} {g(bd.kvBytes)} + buffers {g(bd.computeBufferBytes + bd.runtimeOverheadBytes)} = <b style={{ color: 'var(--ink)' }}>{g(bd.totalNeedBytes)} GB</b> vs {vramAvail} GB available
           </> : (v?.explainability ?? '')}
           <div style={{ marginTop: 10 }}>
             {dl

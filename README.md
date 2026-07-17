@@ -66,7 +66,7 @@ including Kayon's own update check. An update path that skipped the log would ma
 ## Download
 
 **[Get the latest release](https://github.com/thelabs-id/kayon/releases/latest)** and run
-`Kayon_<version>_x64-setup.exe`, then launch Kayon from the Start menu. The llama.cpp CUDA runtime
+`Kayon_<version>_x64-setup.exe`, then launch Kayon from the Start menu. The llama.cpp runtime
 ships inside the installer, so chat and the benchmark work immediately. No separate download, no
 environment variables, no Python.
 
@@ -116,7 +116,7 @@ Local chat with an agentic tool loop. Every tool call shows up inline.
 - Downloads that resume, with pause and cancel. Nothing enters your library without matching its
   pinned hash.
 - Ollama adoption by hard link, with a copy fallback when the store sits on another volume.
-- llama.cpp `llama-server` (CUDA) supervised as a sidecar, launched with exactly the `n_gpu_layers`
+- llama.cpp `llama-server` (Vulkan) supervised as a sidecar, launched with exactly the `n_gpu_layers`
   and context the verdict promised.
 - Chat sessions saved in local SQLite. Reopen any of them and keep going; each carries its own system
   prompt and sampling params.
@@ -202,7 +202,7 @@ MCP and user-defined tool servers are a planned extension. The built-in set come
 | Core | Rust. NVML probe, GGUF reader, the fit engine, resumable checksummed downloads, SQLite (`rusqlite`), ed25519 catalog verification, llama-server supervisor |
 | Shell | Tauri 2, a native WebView2 window over the Rust core |
 | UI | React + TypeScript (Vite): dashboard, model browser, library, chat, privacy, settings |
-| Runtime | Prebuilt llama.cpp `llama-server` (CUDA) as a sidecar, driven over its OpenAI-compatible HTTP API |
+| Runtime | Prebuilt llama.cpp `llama-server` (Vulkan) as a sidecar, driven over its OpenAI-compatible HTTP API |
 | Catalog | Live from Hugging Face, checksum-pinned. An ed25519-signed catalog ships as the offline anchor |
 
 The app starts its local API on `127.0.0.1:9518` on a background thread and renders the UI in the
@@ -243,7 +243,7 @@ src/                  React + TypeScript UI (Vite)
 
 Just want to use Kayon? Take the [installer](#download). This section is for building it yourself.
 
-You'll need Windows 10/11 x64, Rust (stable), Node.js 18+, and a llama.cpp `llama-server.exe` (a CUDA
+You'll need Windows 10/11 x64, Rust (stable), Node.js 18+, and a llama.cpp `llama-server.exe` (a Vulkan
 build, on NVIDIA). An NVIDIA GPU with its driver, and Ollama, are both optional.
 
 ```bash
@@ -263,8 +263,8 @@ cd ../src-tauri && cargo run --bin kayon   # the desktop window
 For hot-reload UI work, run `npm run dev` in `src/` (Vite on :3000, proxying `/api` to :9518).
 
 > [!NOTE]
-> The *installer* bundles `llama-server.exe` (CUDA) as a Tauri resource, so it works out of the box.
-> When *building from source* that CUDA binary isn't committed, because it's a large artifact. Put it
+> The *installer* bundles `llama-server.exe` (Vulkan) as a Tauri resource, so it works out of the box.
+> When *building from source* that binary isn't committed, because it's a large artifact. Put it
 > in `src-tauri/binaries/llama/` before `tauri build`, or point `KAYON_LLAMA_SERVER` at it. The
 > resolver checks the env var, then the bundled resource, then the dev path, then `PATH`.
 
@@ -313,7 +313,7 @@ Decisions worth stating plainly, rather than leaving you to find them:
   by the checksum gate; the bundled anchor stays signed.
 - The catalog signing key isn't in source. It comes from `KAYON_CATALOG_SEED` or a gitignored key
   file, and the verifying key is baked into the binary. In production it belongs in a secret store.
-- Fit constants (CUDA overhead, compute buffer, headroom) ship at conservative defaults. On-device
+- Fit constants (runtime overhead, compute buffer, headroom) ship at measured defaults. On-device
   calibration through the benchmark is a follow-up.
 - Chat is a hand-rolled streaming client over the OpenAI-compatible endpoint, not a chat library.
 - Tool-call traces persist per message. Summarized long-term memory and cross-chat recall aren't in

@@ -70,6 +70,8 @@ async fn fetch_arch(client: &reqwest::Client, repo: &str, file: &str) -> anyhow:
                     "contextLength": m("context_length"),
                     "keyLength": m("attention.key_length"),
                     "valueLength": m("attention.value_length"),
+                    // Sizes the compute buffer (fit §7): logits ≈ n_ubatch × vocab × 4.
+                    "vocabSize": gguf::vocab_size(&h),
                     "attentionType": gguf::attention_type(&h),
                     "runtimeMinVersion": null
                 }));

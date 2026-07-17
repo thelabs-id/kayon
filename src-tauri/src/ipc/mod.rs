@@ -90,7 +90,7 @@ pub struct VerdictBreakdown {
     pub weights_bytes: u64,
     pub kv_bytes: u64,
     pub compute_buffer_bytes: u64,
-    pub cuda_overhead_bytes: u64,
+    pub runtime_overhead_bytes: u64,
     pub vram_avail_bytes: u64,
     pub ram_avail_bytes: u64,
     pub headroom_display_bytes: u64,
@@ -136,6 +136,11 @@ pub struct ArchBlock {
     pub context_length: u32,
     pub key_length: Option<u32>,
     pub value_length: Option<u32>,
+    /// `{arch}.vocab_size` from the GGUF. Sizes the compute buffer, which is dominated by the
+    /// output logits and therefore tracks vocabulary, not parameter count (see `fit::COMPUTE_*`).
+    /// `None` when the header didn't carry it — the fit engine then falls back conservatively.
+    #[serde(default)]
+    pub vocab_size: Option<u32>,
     pub attention_type: Option<String>,
     pub runtime_min_version: Option<String>,
 }

@@ -765,7 +765,20 @@ async fn runtime_load(
             )).into_response();
         }
     }
-    let n_gpu_layers = verdict.as_ref().map(|v| v.n_gpu_layers).unwrap_or(999);
+    // RUN-1: the launch offload is whatever the fit engine computed — never a guess. A failed
+    // verdict used to fall back to 999 (offload everything), which is exactly the fabricated
+    // all-layers launch the spec forbids: on a small GPU it OOMs the very user the verdict was
+    // meant to protect. If we can't compute an honest number, we don't launch.
+    let n_gpu_layers = match verdict.as_ref() {
+        Ok(v) => v.n_gpu_layers,
+        Err(e) => {
+            return err_json(&format!(
+                "can't compute an honest fit for '{}' ({e}) — refusing to launch rather than                  guess an offload that could exhaust VRAM.",
+                model.model_id
+            ))
+            .into_response()
+        }
+    };
 
     // Catalog-derived launch settings (RUN-1): runtimeArgs, plus the runtimeMinVersion gate — a
     // signed entry can require a newer llama.cpp than the bundled one even when the arch is known.

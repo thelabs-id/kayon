@@ -67,7 +67,9 @@ fn probe_gpus() -> Vec<GpuInfo> {
         });
         let cc = device.cuda_compute_capability().ok();
         // v1 requires compute capability >= 5.0 (Maxwell+); a lower or unknown GPU isn't one the
-        // bundled CUDA runtime supports, so we skip it → the "no supported GPU" degraded path.
+        // bundled runtime supports, so we skip it → the "no supported GPU" degraded path.
+        // (Compute capability is read from NVML and is a property of the *card*; the bundled
+        // llama.cpp backend is Vulkan, not CUDA — see §3.)
         if cc.as_ref().map(|c| c.major < 5).unwrap_or(true) {
             continue;
         }
