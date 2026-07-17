@@ -1,0 +1,106 @@
+# Build and publish a Kayon release (UPD).
+#
+# Why this exists: releases were built on one laptop, from whatever happened to be on its disk. That
+# is how Kayon shipped an unidentifiable llama.cpp reporting `version: 1`, and how eight installers
+# went out carrying a runtime nobody could name. Here the runtime comes from a pinned upstream tag
+# with a checksum gate (scripts/fetch-runtime.ps1), so what ships is what runtime-pin.json says.
+#
+# What a release MUST contain for installed apps to see it (UPD-2):
+#   - Kayon_<version>_x64-setup.exe        the NSIS installer, per-user (no UAC)
+#   - Kayon_<version>_x64-setup.exe.sig    its minisign signature
+#   - latest.json                          the manifest the updater polls
+# Miss any one and every installed 1.5.x goes quiet: no error, just no updates ever again.
+#
+# The signing key is the boundary (UPD-3) — this downloads and runs an installer, so TLS is not a
+# substitute. It lives outside the repo (~/.kayon-keys/) and reaches CI only as a secret. Losing it
+# means existing installs can never accept another update; there is no recovery path but a manual
+# reinstall by every user.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a release be re-cut without moving a tag (e.g. a runner-side failure).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v1.5.2)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the release and upload artifacts
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # The pinned llama.cpp sidecar. The script fails the build on a checksum mismatch rather than
+      # ship an unverified binary — the same gate every model download goes through (DL-3).
+      - name: Stage pinned llama.cpp runtime
+        run: pwsh scripts/fetch-runtime.ps1
+
+      - name: Install frontend deps
+        working-directory: src
+        run: npm ci
+
+      # `prebuild` vendors pdf.js into src/public/pdfjs (TOOL-8 renders PDFs offline, no CDN).
+      - name: Build frontend
+        working-directory: src
+        run: npm run build
+
+      # A release is gated on the tests, not just on compiling.
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without these the build still succeeds but emits no .sig, and latest.json is unusable:
+          # every installed app rejects the update. Fail loudly instead — see the guard below.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Kayon ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseBody: 'See the assets below. Windows will warn that the publisher is unknown: Kayon is not code-signed yet, which is separate from the update signature.'
+          releaseDraft: true # a human reviews the notes before it goes live
+          prerelease: false
+          includeUpdaterJson: true
+
+      # Proof, not assumption: assert the three artifacts an installed app needs actually exist
+      # before a human is asked to publish the draft.
+      - name: Verify updater artifacts
+        shell: pwsh
+        run: |
+          $bundle = 'src-tauri/target/release/bundle/nsis'
+          $setup = Get-ChildItem "$bundle/*-setup.exe" -ErrorAction SilentlyContinue
+          $sig   = Get-ChildItem "$bundle/*-setup.exe.sig" -ErrorAction SilentlyContinue
+          if (-not $setup) { throw "no installer in $bundle" }
+          if (-not $sig) {
+            throw "installer built but NOT signed. Every installed Kayon would reject this update. Is the TAURI_SIGNING_PRIVATE_KEY secret set?"
+          }
+          Write-Host "installer: $($setup.Name) ($([math]::Round($setup.Length/1MB,1)) MB)"
+          Write-Host "signature: $($sig.Name)"
