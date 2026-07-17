@@ -108,6 +108,13 @@ jobs:
       # Proof, not assumption. An unsigned or wrongly-signed release does not fail loudly: it
       # publishes cleanly and every installed app then rejects or ignores it, which looks identical
       # to "no update available". So assert what installed apps actually require.
+      #
+      # The updater artifact for a Tauri 2 NSIS build is the setup .exe and its .sig, NOT a
+      # .nsis.zip — confirmed against the shipped v1.5.1 release, whose latest.json `url` points at
+      # Kayon_1.5.1_x64-setup.exe and whose signature trusted-comment names that same file. (Some
+      # older notes say .nsis.zip; they describe a different bundle config and are wrong for this
+      # one.) includeUpdaterJson embeds this .sig into latest.json, so the .sig existing at build
+      # time is what lets the manifest be generated at all.
       - name: Verify updater artifacts
         shell: pwsh
         run: |
@@ -142,14 +149,35 @@ jobs:
             throw "signed with key id $sigId but the app trusts $pubId. Every installed Kayon would reject this update. The TAURI_SIGNING_PRIVATE_KEY secret is not the key this build trusts."
           }
 
-          # Without latest.json the updater has nothing to poll and installed apps see nothing.
-          $manifest = Get-ChildItem 'src-tauri/target/release/bundle/**/latest.json','latest.json' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $manifest) {
-            Write-Host "::warning::latest.json not found locally; tauri-action generates it on the release itself (includeUpdaterJson). Confirm it is attached to the draft before publishing."
-          } else {
-            $v = (Get-Content $manifest.FullName -Raw | ConvertFrom-Json).version
-            Write-Host "latest.json version: $v"
-          }
-
           Write-Host "installer: $($setup.Name) ($([math]::Round($setup.Length/1MB,1)) MB)"
           Write-Host "signature: $($sig.Name) (key id $sigId, trusted)"
+
+      # latest.json is what the updater polls; without it, installed apps see nothing. tauri-action
+      # generates and uploads it to the release rather than the local bundle dir, so this asserts it
+      # on the actual (draft) release — a hard failure, not a warning, and it checks the manifest
+      # points at the version we tagged rather than just existing.
+      - name: Verify latest.json on the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          $expected = $tag -replace '^v', ''
+          # Parse the assets in PowerShell rather than a jq string literal — escaping a quoted jq
+          # filter through pwsh and gh is its own class of silent breakage.
+          $assets = (gh release view $tag --json assets | ConvertFrom-Json).assets
+          if ($LASTEXITCODE -ne 0) { throw "could not read release $tag" }
+          $manifestAsset = $assets | Where-Object { $_.name -eq 'latest.json' } | Select-Object -First 1
+          if (-not $manifestAsset) {
+            throw "release $tag has no latest.json. The updater has nothing to poll and every installed Kayon would see no update. Assets: $($assets.name -join ', ')"
+          }
+          $manifest = Invoke-RestMethod $manifestAsset.url
+          if ($manifest.version -ne $expected) {
+            throw "latest.json advertises $($manifest.version) but this release is $expected. Installed apps compare against it, so the release would be misdelivered."
+          }
+          $url = $manifest.platforms.'windows-x86_64'.url
+          $target = ($url -split '/')[-1]
+          if ($assets.name -notcontains $target) {
+            throw "latest.json points at $target but that asset is not on the release."
+          }
+          Write-Host "latest.json ok: version $($manifest.version), points at $target"

@@ -239,10 +239,14 @@ fn evaluate_inner(
         );
         // Not `compute_buffer_bytes` — the width model above was measured on standard-attention
         // dense models, and this branch exists precisely because this architecture is not one.
-        // Applying it here would be the same fabrication the verdict refuses to make about KV, so
-        // reserve the unknown-width figure instead. It only shrinks the budget, i.e. offloads
-        // fewer layers, which is the safe direction for a model we cannot model.
-        let budget = vram_avail.saturating_sub(COMPUTE_BUFFER_UNKNOWN + RUNTIME_OVERHEAD);
+        // Applying its activation term here would be the same fabrication the verdict refuses to
+        // make about KV. But we still don't want to *under*-reserve: reserve the unknown-width
+        // figure PLUS the context-scaled term, so the budget shrinks monotonically with context and
+        // never sits below what the dense model would have taken (whose activations are always
+        // below the 512 MiB floor for any real arch). Same shape as the MoE reserve, same reason.
+        let unverified_reserve =
+            COMPUTE_BUFFER_UNKNOWN.saturating_add(UBATCH * context_length as u64 * MASK_BYTES);
+        let budget = vram_avail.saturating_sub(unverified_reserve + RUNTIME_OVERHEAD);
         let conservative_ngl = if per_block > 0 {
             ((budget / per_block) as i32).min(arch.block_count as i32).max(0)
         } else {
@@ -560,6 +564,13 @@ mod tests {
         assert_eq!(a.verdict, VerdictKind::UnverifiedArch);
         assert_eq!(b.verdict, VerdictKind::UnverifiedArch);
         assert_eq!(a.n_gpu_layers, b.n_gpu_layers, "unverified ngl must not depend on the dense width model");
+
+        // Conservatism must be monotonic in context: a longer context can only offload the same or
+        // fewer layers, never more. A flat reserve with no context term would let a huge context
+        // offload as much as a small one, then OOM on the runtime buffers it ignored.
+        let short = evaluate_inner("m", "Q4", 8 * GIB, Some(GIB / 4), &narrow, 4096, 2, 24 * GIB, 24 * GIB, 32 * GIB, 32 * GIB);
+        let long = evaluate_inner("m", "Q4", 8 * GIB, Some(GIB / 4), &narrow, 131_072, 2, 24 * GIB, 24 * GIB, 32 * GIB, 32 * GIB);
+        assert!(long.n_gpu_layers <= short.n_gpu_layers, "a longer context must not offload MORE layers");
     }
 
     #[test]
