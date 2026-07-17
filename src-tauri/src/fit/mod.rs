@@ -59,9 +59,13 @@ const COMPUTE_BUFFER_UNKNOWN: u64 = 512 * 1024 * 1024;
 /// supported-standard set and so get real verdicts, and MoE GGUFs arrive via Ollama adoption.
 ///
 /// One measurement is not a model. Rather than fabricate an expert term from a single data point,
-/// MoE reserves this flat figure — comfortably above the one MoE we have measured, and honestly
-/// labelled as conservative-because-unmeasured. Deriving the real expert term needs several MoE
-/// models to measure against and is post-v1 (§7).
+/// MoE reserves this flat figure *in place of the activation term* — comfortably above the one MoE
+/// we have measured, and honestly labelled as conservative-because-unmeasured. Deriving the real
+/// expert term needs several MoE models to measure against and is post-v1 (§7).
+///
+/// It replaces activations only; the KQ mask is still added on top. Taking `max()` of the two
+/// instead would look equivalent and silently drop the expert reserve entirely once the mask grew
+/// past it — at ctx 1M the mask alone is 1 GiB, and MoE would have reserved *nothing* for experts.
 const COMPUTE_BUFFER_MOE_UNMEASURED: u64 = 512 * 1024 * 1024;
 
 /// The VRAM compute buffer llama.cpp will allocate: activations (model width) + KQ mask (context).
@@ -76,9 +80,10 @@ fn compute_buffer_bytes(arch: &ArchBlock, context_length: u32) -> u64 {
     }
     let mask = UBATCH * context_length as u64 * MASK_BYTES;
 
-    // Experts allocate what the dense model can't see. Reserve rather than under-predict.
+    // Experts allocate what the dense model can't see. Reserve rather than under-predict. The mask
+    // is context-driven and applies to MoE the same as anything else, so it adds rather than maxes.
     if arch.expert_count.is_some_and(|n| n > 0) {
-        return std::cmp::max(COMPUTE_BUFFER_MOE_UNMEASURED, mask);
+        return COMPUTE_BUFFER_MOE_UNMEASURED.saturating_add(mask);
     }
 
     let n_ff = arch
@@ -232,8 +237,12 @@ fn evaluate_inner(
         let per_block = per_block_override.unwrap_or(
             if arch.block_count > 0 { w_total / arch.block_count as u64 } else { 0 },
         );
-        let budget =
-            vram_avail.saturating_sub(compute_buffer_bytes(arch, context_length) + RUNTIME_OVERHEAD);
+        // Not `compute_buffer_bytes` — the width model above was measured on standard-attention
+        // dense models, and this branch exists precisely because this architecture is not one.
+        // Applying it here would be the same fabrication the verdict refuses to make about KV, so
+        // reserve the unknown-width figure instead. It only shrinks the budget, i.e. offloads
+        // fewer layers, which is the safe direction for a model we cannot model.
+        let budget = vram_avail.saturating_sub(COMPUTE_BUFFER_UNKNOWN + RUNTIME_OVERHEAD);
         let conservative_ngl = if per_block > 0 {
             ((budget / per_block) as i32).min(arch.block_count as i32).max(0)
         } else {
@@ -522,6 +531,35 @@ mod tests {
         assert!(mib(dense) < 154.88, "fixture guard: the dense model is the under-prediction");
         assert!(mib(got) >= 154.88, "MoE must cover the 154.88 MiB really allocated, got {}", mib(got));
         assert!(got > dense, "MoE must reserve above the dense estimate");
+
+        // The expert reserve must survive a long context rather than be swallowed by the mask: a
+        // `max(flat, mask)` would silently reserve *nothing* for experts once the mask grew past
+        // the flat figure, which at ctx 1M is 1 GiB.
+        let huge = compute_buffer_bytes(&moe, 1_048_576);
+        let mask_1m = UBATCH * 1_048_576 * MASK_BYTES;
+        assert!(huge > mask_1m, "the expert reserve must not vanish under a large mask");
+        assert_eq!(huge - mask_1m, COMPUTE_BUFFER_MOE_UNMEASURED);
+    }
+
+    #[test]
+    fn unverified_arch_does_not_borrow_the_dense_width_model() {
+        // The budget for an unmodellable architecture must not be computed with a buffer model
+        // measured on dense standard-attention models — that is the fabrication the verdict itself
+        // refuses to make. Widening the model must not change an unverified arch's offload.
+        let mut narrow = llama_arch();
+        narrow.architecture = "some-future-arch".into();
+        narrow.embedding_length = 1_024;
+        narrow.feed_forward_length = Some(2_048);
+
+        let mut wide = narrow.clone();
+        wide.embedding_length = 8_192;
+        wide.feed_forward_length = Some(28_672);
+
+        let a = evaluate_inner("m", "Q4", 8 * GIB, Some(GIB / 4), &narrow, 4096, 2, 24 * GIB, 24 * GIB, 32 * GIB, 32 * GIB);
+        let b = evaluate_inner("m", "Q4", 8 * GIB, Some(GIB / 4), &wide, 4096, 2, 24 * GIB, 24 * GIB, 32 * GIB, 32 * GIB);
+        assert_eq!(a.verdict, VerdictKind::UnverifiedArch);
+        assert_eq!(b.verdict, VerdictKind::UnverifiedArch);
+        assert_eq!(a.n_gpu_layers, b.n_gpu_layers, "unverified ngl must not depend on the dense width model");
     }
 
     #[test]

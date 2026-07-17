@@ -51,6 +51,21 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The tag names the release; tauri.conf.json's version is what the updater actually compares
+      # against (`package_info().version`). If they disagree, a v1.5.2 tag publishes a latest.json
+      # advertising 1.5.1 and every installed 1.5.1 decides it is already up to date — a release
+      # that fails by being silent. Assert rather than rewrite: the artifact must match the source
+      # that was reviewed and tagged.
+      - name: Version must match the tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}' -replace '^v', ''
+          $cfg = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($cfg -ne $tag) {
+            throw "tag is v$tag but src-tauri/tauri.conf.json says $cfg. Installed apps compare against the config version, so this release would be invisible to them. Bump the version, commit, then re-tag."
+          }
+          Write-Host "version $cfg matches tag"
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -90,17 +105,51 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
 
-      # Proof, not assumption: assert the three artifacts an installed app needs actually exist
-      # before a human is asked to publish the draft.
+      # Proof, not assumption. An unsigned or wrongly-signed release does not fail loudly: it
+      # publishes cleanly and every installed app then rejects or ignores it, which looks identical
+      # to "no update available". So assert what installed apps actually require.
       - name: Verify updater artifacts
         shell: pwsh
         run: |
           $bundle = 'src-tauri/target/release/bundle/nsis'
-          $setup = Get-ChildItem "$bundle/*-setup.exe" -ErrorAction SilentlyContinue
-          $sig   = Get-ChildItem "$bundle/*-setup.exe.sig" -ErrorAction SilentlyContinue
+          $setup = Get-ChildItem "$bundle/*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $sig   = Get-ChildItem "$bundle/*-setup.exe.sig" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $setup) { throw "no installer in $bundle" }
           if (-not $sig) {
             throw "installer built but NOT signed. Every installed Kayon would reject this update. Is the TAURI_SIGNING_PRIVATE_KEY secret set?"
           }
+
+          # A signature from the wrong key is worse than none: it looks like a real release and is
+          # rejected by every install. The signature and the pubkey baked into the app both carry
+          # the same minisign key id, so compare them instead of trusting the secret is the right one.
+          #
+          # The @() around each filter is load-bearing, not decoration: these blobs are two lines, so
+          # dropping the comment leaves ONE line, Where-Object returns a bare string rather than an
+          # array, and [0] then indexes its first *character*. Verified against a real 1.5.0 .sig and
+          # the baked pubkey: without @() both ids come out empty and this gate fails every release.
+          function Get-KeyId([byte[]]$b) { ($b[2..9] | ForEach-Object { $_.ToString('x2') }) -join '' }
+          $pub = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(
+                   (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).plugins.updater.pubkey))
+          $pubLine = @($pub -split "`n" | Where-Object { $_ -and $_ -notmatch '^untrusted comment:' })[0].Trim()
+          $pubId = Get-KeyId ([Convert]::FromBase64String($pubLine))
+
+          $sigText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-Content $sig.FullName -Raw).Trim()))
+          $sigLine = @($sigText -split "`n" | Where-Object { $_ -and $_ -notmatch '^untrusted comment:' })[0].Trim()
+          $sigId = Get-KeyId ([Convert]::FromBase64String($sigLine))
+
+          if (-not $pubId -or -not $sigId) { throw "could not read a key id from the signature or the baked pubkey (got '$sigId' / '$pubId')" }
+          if ($pubId -ne $sigId) {
+            throw "signed with key id $sigId but the app trusts $pubId. Every installed Kayon would reject this update. The TAURI_SIGNING_PRIVATE_KEY secret is not the key this build trusts."
+          }
+
+          # Without latest.json the updater has nothing to poll and installed apps see nothing.
+          $manifest = Get-ChildItem 'src-tauri/target/release/bundle/**/latest.json','latest.json' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $manifest) {
+            Write-Host "::warning::latest.json not found locally; tauri-action generates it on the release itself (includeUpdaterJson). Confirm it is attached to the draft before publishing."
+          } else {
+            $v = (Get-Content $manifest.FullName -Raw | ConvertFrom-Json).version
+            Write-Host "latest.json version: $v"
+          }
+
           Write-Host "installer: $($setup.Name) ($([math]::Round($setup.Length/1MB,1)) MB)"
-          Write-Host "signature: $($sig.Name)"
+          Write-Host "signature: $($sig.Name) (key id $sigId, trusted)"

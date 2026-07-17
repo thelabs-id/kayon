@@ -87,12 +87,26 @@ impl RuntimeManager {
         // `kv_unified = true`, i.e. `n_ctx_seq == n_ctx`. Passing it flips unified KV off and
         // silently re-cuts every slot's context to `n_ctx / n_parallel` — the verdict would then
         // describe a context the user does not actually get.
-        const RESERVED: &[&str] = &[
+        // Reserved flags that take a value: drop the flag *and* the value that follows it.
+        const RESERVED_WITH_VALUE: &[&str] = &[
             "-ngl", "--n-gpu-layers", "-c", "--ctx-size", "--cache-type-k", "--cache-type-v",
             "--host", "--port", "-m", "--model",
             "-ub", "--ubatch-size", "-b", "--batch-size",
             "-np", "--parallel",
         ];
+        // Reserved flags that take NO value: drop the flag only. These must be listed separately —
+        // dropping a "value" after a boolean would swallow whatever flag came next, so putting
+        // `--no-kv-offload` in the list above would turn ["--no-kv-offload", "--jinja"] into a run
+        // with no `--jinja` and a model emitting malformed turns.
+        //
+        // `--no-kv-offload` moves the KV cache to host RAM, which is a different memory picture
+        // than the one the verdict promised on both sides: VRAM and RAM.
+        const RESERVED_BOOL: &[&str] = &["-nkvo", "--no-kv-offload"];
+        // Deliberately not reserved: `-fa`/`--flash-attn`. Its value form changed across llama.cpp
+        // builds (bare boolean, then on|off|auto), so guessing which arm it belongs in is how the
+        // bug above gets reintroduced. The bundled build defaults to `auto`, which is what §7 was
+        // measured against, and enabling it reduces memory rather than raising it. runtimeArgs are
+        // human-curated per CAT-6, so revisit this deliberately if an entry ever needs it.
         let mut skip_value = false;
         for arg in runtime_args {
             if skip_value {
@@ -100,9 +114,10 @@ impl RuntimeManager {
                 continue;
             }
             let flag = arg.split('=').next().unwrap_or(arg);
-            if RESERVED.contains(&flag) {
-                if !arg.contains('=') {
-                    skip_value = true; // "-flag value" form — also drop the following value
+            if RESERVED_WITH_VALUE.contains(&flag) || RESERVED_BOOL.contains(&flag) {
+                // "-flag value" form — also drop the following value. Never for a boolean.
+                if RESERVED_WITH_VALUE.contains(&flag) && !arg.contains('=') {
+                    skip_value = true;
                 }
                 log::warn!("ignoring reserved runtimeArg that would override fit/binding: {}", arg);
                 continue;
@@ -238,11 +253,18 @@ impl RuntimeManager {
     }
 
     /// Version of the bundled llama.cpp runtime (RUN-1 / catalog `runtimeMinVersion` gate), or None
-    /// if unknown. Real builds inject `KAYON_RUNTIME_VERSION` at package time. When it's unknown we
-    /// fail CLOSED against a runtimeMinVersion requirement rather than launch a model that may need
-    /// a newer runtime — better to block than to start-and-fail.
+    /// if unknown. When it's unknown we fail CLOSED against a runtimeMinVersion requirement rather
+    /// than launch a model that may need a newer runtime — better to block than to start-and-fail.
+    ///
+    /// Baked at compile time by `build.rs` from `runtime-pin.json`, which is the same record CI
+    /// stages the sidecar from, so the gate cannot disagree with the binary that actually shipped.
+    /// This used to read `std::env::var` — i.e. the user's environment at *runtime*, which never has
+    /// it set — so every packaged build answered "unknown" and gated every `runtimeMinVersion`.
     pub fn bundled_runtime_version() -> Option<String> {
-        std::env::var("KAYON_RUNTIME_VERSION").ok().filter(|s| !s.trim().is_empty())
+        option_env!("KAYON_RUNTIME_VERSION")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     }
 
     /// Resolve the `llama-server` binary (RUN-1). The runtime is bundled as a Tauri sidecar so it
